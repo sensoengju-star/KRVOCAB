@@ -42,31 +42,66 @@ class TtsService {
     if (_initialized) return;
     _initialized = true;
 
+    // Every probe is guarded on its own. flutter_tts implements a DIFFERENT
+    // SUBSET of methods per platform, and an unimplemented one throws
+    // MissingPluginException rather than returning null — Windows, for
+    // instance, has no `isLanguageAvailable`. A missing *query* says nothing
+    // about whether the voice exists, so it must never disable the feature.
+    await _quiet(() => _tts.awaitSpeakCompletion(true));
+
+    if (await _hasKoreanVoice() == false) {
+      isKoreanAvailable = false;
+      unavailableReason = _missingVoiceMessage;
+      return;
+    }
+
+    // Selecting the language is the operation that genuinely fails when no
+    // Korean voice is installed, so its success is the real verdict.
     try {
-      // Desktop engines report completion unreliably without this.
-      await _tts.awaitSpeakCompletion(true);
-
-      // A definite `false` means the engine looked and has no Korean voice.
-      // `null` means it couldn't answer the question (not every platform
-      // implementation supports the query) — that's not evidence of absence,
-      // so we try to select the language and let THAT be the verdict.
-      final available = await _tts.isLanguageAvailable(koreanLocale);
-      if (available == false) {
-        isKoreanAvailable = false;
-        unavailableReason = _missingVoiceMessage;
-        return;
-      }
-
       await _tts.setLanguage(koreanLocale);
-      await _tts.setPitch(1.0);
+      await _quiet(() => _tts.setPitch(1.0));
       await setRate(_rate);
       isKoreanAvailable = true;
     } catch (e) {
       isKoreanAvailable = false;
-      // Selecting ko-KR is what usually throws when the voice isn't there,
-      // so report the actionable message rather than the raw exception.
       unavailableReason = '$_missingVoiceMessage\n\n($e)';
-      _log('init failed: $e');
+      _log('setLanguage failed: $e');
+    }
+  }
+
+  /// Whether a Korean voice exists: true / false / null when this platform
+  /// can't be asked.
+  Future<bool?> _hasKoreanVoice() async {
+    // Android, iOS and macOS answer this directly.
+    try {
+      final direct = await _tts.isLanguageAvailable(koreanLocale);
+      if (direct is bool) return direct;
+    } catch (e) {
+      _log('isLanguageAvailable unsupported here ($e) — falling back');
+    }
+
+    // Windows doesn't implement the check above, but does list its voices.
+    try {
+      final langs = await _tts.getLanguages;
+      if (langs is List && langs.isNotEmpty) {
+        return langs.any(
+          (l) => '$l'.toLowerCase().replaceAll('_', '-').startsWith('ko'),
+        );
+      }
+    } catch (e) {
+      _log('getLanguages unsupported here ($e)');
+    }
+
+    return null; // Unknown — let setLanguage decide.
+  }
+
+  /// Runs a call whose failure shouldn't matter (an optional tuning knob the
+  /// current platform may not implement).
+  Future<void> _quiet(Future<dynamic> Function() call) async {
+    try {
+      await call();
+    } catch (e) {
+      _log('optional call failed: $e');
     }
   }
 
@@ -85,6 +120,7 @@ class TtsService {
 
   Future<void> setRate(double value) async {
     _rate = value.clamp(0.1, 1.0);
+    if (!_initialized) return; // Restored from prefs before init ran.
     try {
       // iOS/macOS interpret the same range differently — 1.0 there is
       // extremely fast, so the scale is compressed.
