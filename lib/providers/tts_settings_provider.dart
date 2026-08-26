@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../services/narration_service.dart';
 import '../services/tts_service.dart';
 
 /// Whether a card speaks itself when it flips to the answer side.
@@ -57,3 +58,40 @@ class SpeechRateNotifier extends StateNotifier<double> {
 final speechRateProvider =
     StateNotifierProvider<SpeechRateNotifier, double>(
         (ref) => SpeechRateNotifier());
+
+/// Which engine narrates STORIES. Everything else — word taps, the flashcard
+/// answer, the word page — always uses the free local engine, so a paid API
+/// can only ever be spent on story narration.
+class NarrationSourceNotifier extends StateNotifier<NarrationSource> {
+  NarrationSourceNotifier() : super(NarrationSource.local) {
+    _load();
+  }
+
+  static const _key = 'narration_source';
+
+  Future<void> _load() async {
+    final p = await SharedPreferences.getInstance();
+    final saved = p.getString(_key);
+    state = saved == NarrationSource.elevenLabs.name
+        ? NarrationSource.elevenLabs
+        : NarrationSource.local;
+  }
+
+  Future<void> set(NarrationSource value) async {
+    state = value;
+    final p = await SharedPreferences.getInstance();
+    await p.setString(_key, value.name);
+  }
+}
+
+final narrationSourceProvider =
+    StateNotifierProvider<NarrationSourceNotifier, NarrationSource>(
+        (ref) => NarrationSourceNotifier());
+
+/// The single story-narration player. Kept app-wide so starting one story
+/// stops whatever else was speaking.
+final narrationProvider = Provider<NarrationController>((ref) {
+  final controller = NarrationController();
+  ref.onDispose(controller.dispose);
+  return controller;
+});

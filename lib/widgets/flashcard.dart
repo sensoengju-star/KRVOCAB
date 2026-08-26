@@ -12,6 +12,12 @@ import 'dictionary_form.dart';
 class Flashcard extends StatefulWidget {
   const Flashcard({super.key, required this.word, required this.revealed});
 
+  /// How long the flip takes. Public so callers can sequence work around it —
+  /// the Review screen waits this out before speaking, since a platform
+  /// channel call lands on the UI thread on desktop and would stutter the
+  /// animation.
+  static const Duration flipDuration = Duration(milliseconds: 320);
+
   final VocabWord word;
   final bool revealed;
 
@@ -25,7 +31,7 @@ class _FlashcardState extends State<Flashcard>
   // long enough to read as a flip rather than a swap.
   late final AnimationController _c = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 320),
+    duration: Flashcard.flipDuration,
   );
   late final Animation<double> _anim =
       CurvedAnimation(parent: _c, curve: Curves.easeOutCubic);

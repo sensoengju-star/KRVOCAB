@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../providers/tts_settings_provider.dart';
+import '../services/narration_service.dart';
 import '../theme/app_colors.dart';
 
 /// A short Korean story that weaves in several vocabulary words.
@@ -59,7 +62,7 @@ class VocabStory {
   bool get isRenderable => korean.trim().isNotEmpty;
 }
 
-class StoryCard extends StatefulWidget {
+class StoryCard extends ConsumerStatefulWidget {
   const StoryCard({
     super.key,
     required this.story,
@@ -78,11 +81,18 @@ class StoryCard extends StatefulWidget {
   final Map<String, String> glossary;
 
   @override
-  State<StoryCard> createState() => _StoryCardState();
+  ConsumerState<StoryCard> createState() => _StoryCardState();
 }
 
-class _StoryCardState extends State<StoryCard> {
+class _StoryCardState extends ConsumerState<StoryCard> {
   bool _showEnglish = false;
+
+  /// Identifies this card to the shared narration player. Derived from the
+  /// text itself — stories are generated, not stored, so they have no id.
+  String get _storyId =>
+      '${widget.story.title}#${widget.story.korean.hashCode}';
+
+  List<String> get _sentences => splitSentences(widget.story.korean);
 
   @override
   Widget build(BuildContext context) {
@@ -99,18 +109,27 @@ class _StoryCardState extends State<StoryCard> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (s.title.trim().isNotEmpty) ...[
-            Text(
-              s.title,
-              style: GoogleFonts.playfairDisplay(
-                color: AppColors.deepGold,
-                fontSize: 19,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(height: 10),
-          ],
-          _buildKoreanHighlighted(context),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              if (s.title.trim().isNotEmpty)
+                Expanded(
+                  child: Text(
+                    s.title,
+                    style: GoogleFonts.playfairDisplay(
+                      color: AppColors.deepGold,
+                      fontSize: 19,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                )
+              else
+                const Spacer(),
+              _narrateButton(),
+            ],
+          ),
+          const SizedBox(height: 10),
+          _narratedBody(context),
           if (s.english.trim().isNotEmpty) ...[
             const SizedBox(height: 10),
             _toggleRow(
@@ -140,6 +159,108 @@ class _StoryCardState extends State<StoryCard> {
           ],
         ],
       ),
+    );
+  }
+
+  /// Play / pause for the whole story.
+  Widget _narrateButton() {
+    final controller = ref.read(narrationProvider);
+    return ValueListenableBuilder<NarrationState>(
+      valueListenable: controller,
+      builder: (context, st, _) {
+        final active = st.isActive(_storyId);
+        final playing = active && st.playing;
+        final loading = active && st.loading;
+
+        return Tooltip(
+          message: playing ? 'narration 멈추기' : '이야기 듣기',
+          child: Material(
+            color: playing
+                ? AppColors.goldTint(context)
+                : Colors.transparent,
+            shape: const CircleBorder(),
+            child: InkWell(
+              customBorder: const CircleBorder(),
+              onTap: () {
+                // Source is applied per play so a Settings change takes
+                // effect on the next press without restarting the app.
+                controller.source = ref.read(narrationSourceProvider);
+                if (playing) {
+                  controller.pause();
+                } else {
+                  controller.play(
+                    _storyId,
+                    _sentences,
+                    from: active ? st.index : 0,
+                  );
+                }
+              },
+              child: Padding(
+                padding: const EdgeInsets.all(8),
+                child: loading
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor:
+                              AlwaysStoppedAnimation(AppColors.antiqueGold),
+                        ),
+                      )
+                    : Icon(
+                        playing
+                            ? Icons.pause_circle_outline
+                            : Icons.play_circle_outline,
+                        color: AppColors.deepGold,
+                        size: 24,
+                      ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// The story, one sentence per line so the line being spoken can be
+  /// highlighted and any line can be tapped to hear it again.
+  Widget _narratedBody(BuildContext context) {
+    final controller = ref.read(narrationProvider);
+    final sentences = _sentences;
+    if (sentences.isEmpty) {
+      return _buildKoreanHighlighted(context, widget.story.korean);
+    }
+
+    return ValueListenableBuilder<NarrationState>(
+      valueListenable: controller,
+      builder: (context, st, _) {
+        final active = st.isActive(_storyId);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            for (var i = 0; i < sentences.length; i++)
+              _SentenceLine(
+                highlighted: active && st.index == i,
+                onTap: () {
+                  controller.source = ref.read(narrationSourceProvider);
+                  controller.play(_storyId, sentences, from: i);
+                },
+                child: _buildKoreanHighlighted(context, sentences[i]),
+              ),
+            if (active && st.error != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                st.error!,
+                style: GoogleFonts.inter(
+                  color: AppColors.softRed,
+                  fontSize: 12,
+                  height: 1.4,
+                ),
+              ),
+            ],
+          ],
+        );
+      },
     );
   }
 
@@ -177,8 +298,7 @@ class _StoryCardState extends State<StoryCard> {
     );
   }
 
-  Widget _buildKoreanHighlighted(BuildContext context) {
-    final korean = widget.story.korean;
+  Widget _buildKoreanHighlighted(BuildContext context, String korean) {
     final base = GoogleFonts.notoSerifKr(
       color: AppColors.ink(context),
       fontSize: 19,
@@ -303,5 +423,44 @@ class _StoryCardState extends State<StoryCard> {
     flush();
 
     return RichText(text: TextSpan(style: base, children: spans));
+  }
+}
+
+/// One sentence of a story: tinted while it's being spoken, tappable to
+/// replay from there.
+class _SentenceLine extends StatelessWidget {
+  const _SentenceLine({
+    required this.highlighted,
+    required this.onTap,
+    required this.child,
+  });
+
+  final bool highlighted;
+  final VoidCallback onTap;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      borderRadius: BorderRadius.circular(AppRadius.xs),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(AppRadius.xs),
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          width: double.infinity,
+          margin: const EdgeInsets.only(bottom: 2),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+          decoration: BoxDecoration(
+            color: highlighted
+                ? AppColors.goldTint(context)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(AppRadius.xs),
+          ),
+          child: child,
+        ),
+      ),
+    );
   }
 }

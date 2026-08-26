@@ -36,6 +36,9 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
   final ValueNotifier<bool?> _match = ValueNotifier<bool?>(null);
   Timer? _autoAdvance;
 
+  /// Pending auto-pronunciation, held until the flip animation finishes.
+  Timer? _speakTimer;
+
   /// True during the post-correct reinforcement window. While locked we
   /// ignore further keystrokes so the Korean IME can't dribble extra jamo
   /// into the field before the user advances.
@@ -49,6 +52,7 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
   @override
   void dispose() {
     _autoAdvance?.cancel();
+    _speakTimer?.cancel();
     _controller.dispose();
     _focus.dispose();
     _match.dispose();
@@ -57,6 +61,10 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
 
   void _resetCardUi() {
     _autoAdvance?.cancel();
+    // Leaving the card cancels its pending utterance — otherwise flicking
+    // through a deck queues up a chorus of half-spoken words.
+    _speakTimer?.cancel();
+    TtsService.instance.stop();
     _exampleRequestId++; // discard any pending example response
     // Drop focus first — this terminates any pending IME composition so the
     // next requestFocus starts from a clean slate. Setting .value (not just
@@ -149,6 +157,27 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
     ref.read(reviewProvider.notifier).reveal();
   }
 
+  /// Speaks [word] once the card has finished turning.
+  ///
+  /// Platform channel calls run on the platform thread, which on Windows and
+  /// macOS is also the UI thread — and the first utterance pays for the
+  /// speech engine spinning up its voice and audio pipeline. Firing that
+  /// during the flip drops frames right where they're most visible, so the
+  /// utterance waits for the animation to land instead.
+  void _speakAfterFlip(VocabWord word) {
+    _speakTimer?.cancel();
+    _speakTimer = Timer(
+      Flashcard.flipDuration + const Duration(milliseconds: 40),
+      () {
+        if (!mounted) return;
+        // The user may have moved on while the card was turning.
+        final current = ref.read(reviewProvider).current;
+        if (current?.id != word.id) return;
+        TtsService.instance.speakWord(word);
+      },
+    );
+  }
+
   Future<void> _fetchExample(VocabWord word) async {
     final myId = ++_exampleRequestId;
     final result = await LlmService.instance.generateOneExample(word.hangul);
@@ -199,7 +228,7 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
       final wasRevealedForSameCard =
           prev != null && prev.revealed && prev.current?.id == w.id;
       if (wasRevealedForSameCard) return;
-      TtsService.instance.speakWord(w);
+      _speakAfterFlip(w);
     });
 
     final state = ref.watch(reviewProvider);

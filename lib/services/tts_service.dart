@@ -162,6 +162,9 @@ class TtsService {
   }
 
   Future<void> stop() async {
+    // Skip the platform hop when nothing is playing — this is called on every
+    // card change, and an idle round-trip still costs a beat on the UI thread.
+    if (!_speaking) return;
     try {
       await _tts.stop();
     } catch (_) {

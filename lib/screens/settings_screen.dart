@@ -17,6 +17,7 @@ import '../services/llm_service.dart';
 import '../services/storage_service.dart';
 import '../services/tts_service.dart';
 import '../theme/app_colors.dart';
+import '../widgets/elevenlabs_settings.dart';
 import '../widgets/gold_button.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
@@ -335,6 +336,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
           ),
         ),
+        const GoldDiamondDivider(),
+
+        _section(context, 'Story narration'),
+        const ElevenLabsSettings(),
         const GoldDiamondDivider(),
 
         _section(context, 'Review'),
