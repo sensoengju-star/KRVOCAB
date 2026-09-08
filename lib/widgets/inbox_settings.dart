@@ -9,6 +9,7 @@ import '../services/claude_service.dart';
 import '../services/inbox_service.dart';
 import '../theme/app_colors.dart';
 import 'gold_button.dart';
+import 'import_history_sheet.dart';
 
 /// Settings for the phone inbox: the folder to watch, the key used to define
 /// what turns up in it, and a way to pull it in on demand.
@@ -281,6 +282,16 @@ class _InboxSettingsState extends ConsumerState<InboxSettings> {
                 child: Text('Save',
                     style: GoogleFonts.inter(
                         fontSize: 12.5, fontWeight: FontWeight.w600)),
+              ),
+              const Spacer(),
+              TextButton.icon(
+                onPressed: () => ImportHistorySheet.show(context),
+                icon: const Icon(Icons.history, size: 16),
+                label: Text('History',
+                    style: GoogleFonts.inter(
+                        fontSize: 12.5, fontWeight: FontWeight.w600)),
+                style: TextButton.styleFrom(
+                    foregroundColor: AppColors.mutedInk(context)),
               ),
             ],
           ),

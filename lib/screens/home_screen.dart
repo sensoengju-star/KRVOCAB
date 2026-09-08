@@ -8,6 +8,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../providers/vocab_provider.dart';
 import '../services/inbox_service.dart';
 import '../theme/app_colors.dart';
+import '../widgets/import_history_sheet.dart';
 import '../widgets/data_safety_sheet.dart';
 import 'blocks_screen.dart';
 import 'examples_screen.dart';
@@ -123,8 +124,9 @@ class HomeScreen extends ConsumerWidget {
             // lives in the header rather than three taps deep in Settings.
             _CircleAction(
               icon: Icons.download_outlined,
-              tooltip: 'Import words from phone',
+              tooltip: 'Import words from phone\nHold for history',
               onTap: () => _importFromPhone(context, ref),
+              onLongPress: () => ImportHistorySheet.show(context),
             ),
             const SizedBox(width: 8),
             // Next to Settings, and deliberately not inside it: the one
@@ -408,11 +410,13 @@ class _CircleAction extends StatelessWidget {
     required this.icon,
     required this.tooltip,
     required this.onTap,
+    this.onLongPress,
   });
 
   final IconData icon;
   final String tooltip;
   final VoidCallback onTap;
+  final VoidCallback? onLongPress;
 
   @override
   Widget build(BuildContext context) {
@@ -428,6 +432,7 @@ class _CircleAction extends StatelessWidget {
         child: InkWell(
           customBorder: const CircleBorder(),
           onTap: onTap,
+          onLongPress: onLongPress,
           child: Padding(
             padding: const EdgeInsets.all(9),
             child: Icon(icon, size: 19, color: AppColors.lightGold),

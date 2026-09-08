@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/vocab_word.dart';
 import 'claude_service.dart';
+import 'import_log.dart';
 import 'storage_service.dart';
 
 /// Picks up words captured on the phone and files them into the collection.
@@ -245,7 +246,7 @@ class InboxService {
       await StorageService.instance.flushAll();
     }
 
-    return InboxResult(
+    final result = InboxResult(
       addedLearning: addedLearning,
       addedReinforced: addedReinforced,
       skipped: skipped,
@@ -254,6 +255,11 @@ class InboxService {
       corrections: corrections,
       errors: errors,
     );
+    // Logged here rather than at each call site: an import can be triggered
+    // from four places, and a log that depends on the caller remembering is a
+    // log with holes in it.
+    await ImportLog.instance.record(result);
+    return result;
   }
 
   /// The inbox root plus whichever status subfolders exist, each carrying the
