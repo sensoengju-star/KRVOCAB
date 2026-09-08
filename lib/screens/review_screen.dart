@@ -386,17 +386,6 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
               ),
             ),
 
-            // 2. One lap done — offer to file the deck away. It shows up only
-            // once every card has been answered, so the button can never be
-            // used to skip a review that hasn't happened.
-            if (state.lapComplete) ...[
-              const SizedBox(height: 10),
-              _LapCompleteBanner(
-                count: state.deck.length,
-                onArchive: _archiveDeck,
-              ),
-            ],
-
             const SizedBox(height: 12),
 
             // 3. Status row
@@ -437,6 +426,32 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
                             Icons.auto_awesome_outlined,
                             size: 16,
                             color: AppColors.deepGold,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    // Always here, never announced: the archive control holds
+                    // its place in the row from the first card so nothing
+                    // shifts or pops up when the lap ends — it simply lights
+                    // up and starts responding.
+                    Tooltip(
+                      message: state.lapComplete
+                          ? '${state.deck.length}개 단어를 묶어서 보관'
+                          : '한 바퀴를 다 끝내면 묶어서 보관할 수 있어요 '
+                              '(${state.answered.length}/${state.deck.length})',
+                      child: InkWell(
+                        onTap: state.lapComplete ? _archiveDeck : null,
+                        borderRadius: BorderRadius.circular(20),
+                        child: Padding(
+                          padding: const EdgeInsets.all(4),
+                          child: Icon(
+                            Icons.archive_outlined,
+                            size: 16,
+                            color: state.lapComplete
+                                ? AppColors.antiqueGold
+                                : AppColors.mutedInk(context)
+                                    .withValues(alpha: 0.4),
                           ),
                         ),
                       ),
@@ -607,76 +622,6 @@ class _CircleBackButton extends StatelessWidget {
 
 /// Compact inline reinforcement: one Korean sentence shown after a correct
 /// answer. The English translation is hidden until the user taps to reveal it.
-/// Shown once every card in the deck has been answered.
-///
-/// It is the only route to setting a batch aside, which is deliberate: the
-/// offer to file words away only makes sense as the reward for finishing.
-class _LapCompleteBanner extends StatelessWidget {
-  const _LapCompleteBanner({required this.count, required this.onArchive});
-
-  final int count;
-  final VoidCallback onArchive;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(14, 11, 10, 11),
-      decoration: BoxDecoration(
-        color: AppColors.goldTint(context),
-        borderRadius: BorderRadius.circular(AppRadius.sm),
-        border:
-            Border.all(color: AppColors.antiqueGold.withValues(alpha: 0.35)),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.check_circle_outline,
-              color: AppColors.antiqueGold, size: 19),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '한 바퀴 끝! $count개 단어를 모두 확인했어요',
-                  style: GoogleFonts.notoSerifKr(
-                    color: AppColors.ink(context),
-                    fontSize: 13.5,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  '묶어서 보관하면 새 단어만 남아요',
-                  style: GoogleFonts.notoSerifKr(
-                    color: AppColors.mutedInk(context),
-                    fontSize: 11.5,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
-          FilledButton.icon(
-            onPressed: onArchive,
-            icon: const Icon(Icons.inventory_2_outlined, size: 16),
-            label: Text(
-              '묶어서 보관',
-              style: GoogleFonts.notoSerifKr(
-                  fontSize: 12.5, fontWeight: FontWeight.w700),
-            ),
-            style: FilledButton.styleFrom(
-              backgroundColor: AppColors.antiqueGold,
-              foregroundColor: AppColors.onyx,
-              padding: const EdgeInsets.symmetric(horizontal: 14),
-              visualDensity: VisualDensity.compact,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 class _ExamplePreview extends StatefulWidget {
   const _ExamplePreview({
     required this.loading,
