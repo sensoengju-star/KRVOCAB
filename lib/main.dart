@@ -100,7 +100,7 @@ class _MaldariAppState extends ConsumerState<MaldariApp>
   /// back from the phone is enough to see the new words — there is nothing to
   /// press. Silent when there is nothing to report.
   Future<void> _importInbox() async {
-    if (_importing) return;
+    if (_importing || InboxService.instance.autoImportPaused) return;
     _importing = true;
     try {
       final result = await InboxService.instance.importNow();

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 
@@ -40,6 +41,8 @@ class _InboxSettingsState extends ConsumerState<InboxSettings> {
   @override
   void initState() {
     super.initState();
+    // Nothing may import behind your back while you are setting it up.
+    InboxService.instance.autoImportPaused = true;
     _load();
   }
 
@@ -62,6 +65,7 @@ class _InboxSettingsState extends ConsumerState<InboxSettings> {
 
   @override
   void dispose() {
+    InboxService.instance.autoImportPaused = false;
     _folder.dispose();
     _key.dispose();
     super.dispose();
@@ -75,6 +79,9 @@ class _InboxSettingsState extends ConsumerState<InboxSettings> {
       await InboxService.instance.setFolder(path);
     }
     await InboxService.instance.setDefaultStatus(_status);
+    // Make the two status folders exist (and sync) so a second shortcut has
+    // somewhere to point.
+    await InboxService.instance.ensureFolders();
     await ClaudeService.instance.save(apiKey: _key.text, model: _model);
   }
 
@@ -147,15 +154,22 @@ class _InboxSettingsState extends ConsumerState<InboxSettings> {
             'processed subfolder once imported, never deleted.',
           ),
           const SizedBox(height: 10),
-          _field(context, _folder, hint: InboxService.defaultFolder),
+          _field(
+            context,
+            _folder,
+            hint: InboxService.defaultFolder,
+            onChanged: (_) => setState(() {}),
+          ),
 
           const SizedBox(height: 18),
           _label(context, 'API key'),
           _hint(
             context,
-            'A file from the phone is just a list of words. Claude fills in the '
-            'reading, meaning, part of speech and 해요체 form on import. The key '
-            'is stored on this machine only — never in the project.',
+            'A file from the phone is a numbered list of words. Claude '
+            'corrects typos and fills in the reading, meaning, part of speech '
+            'and 해요체 form on import. Unnumbered lines are skipped and '
+            'reported. The key is stored on this machine only — never in the '
+            'project.',
           ),
           const SizedBox(height: 10),
           _field(
@@ -225,8 +239,10 @@ class _InboxSettingsState extends ConsumerState<InboxSettings> {
           _label(context, 'Words arrive as'),
           _hint(
             context,
-            'A plain list from the phone carries no status, so it takes this '
-            'one. You can move a word to the other pile any time.',
+            'This applies to files saved straight into the inbox folder. To '
+            'decide per capture instead, point a second shortcut at the '
+            'reinforced (or learning) subfolder — anything saved there ignores '
+            'this setting. Both folders are created for you when you save.',
           ),
           const SizedBox(height: 8),
           SegmentedButton<WordStatus>(
@@ -246,6 +262,8 @@ class _InboxSettingsState extends ConsumerState<InboxSettings> {
             showSelectedIcon: false,
             onSelectionChanged: (s) => setState(() => _status = s.first),
           ),
+          const SizedBox(height: 12),
+          _FolderMap(root: _folder.text.trim(), fallback: _status),
 
           const SizedBox(height: 16),
           Row(
@@ -302,10 +320,12 @@ class _InboxSettingsState extends ConsumerState<InboxSettings> {
     required String hint,
     bool obscure = false,
     Widget? trailing,
+    ValueChanged<String>? onChanged,
   }) =>
       TextField(
         controller: controller,
         obscureText: obscure,
+        onChanged: onChanged,
         style: GoogleFonts.inter(fontSize: 13),
         decoration: InputDecoration(
           isDense: true,
@@ -323,6 +343,150 @@ class _InboxSettingsState extends ConsumerState<InboxSettings> {
           ),
         ),
         onSubmitted: (_) => _saveAndTell(),
+      );
+}
+
+
+/// The three folders and what each one does with the words in it.
+///
+/// It answers the question the status picker raises — "so where do I point the
+/// second shortcut?" — and it tracks the picker, because which folder is the
+/// default one is precisely what that picker decides.
+class _FolderMap extends StatelessWidget {
+  const _FolderMap({required this.root, required this.fallback});
+
+  /// The inbox path as currently typed. Empty until one is set.
+  final String root;
+
+  /// The pile the root folder currently feeds.
+  final WordStatus fallback;
+
+  @override
+  Widget build(BuildContext context) {
+    if (root.isEmpty) {
+      return _hintBox(context, 'Set the synced folder above to see the paths.');
+    }
+    final sep = root.endsWith(r'\') ? '' : r'\';
+    final fallbackIsReinforced = fallback == WordStatus.reinforcement;
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+      decoration: BoxDecoration(
+        color: AppColors.inset(context),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppColors.hairline(context)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _row(
+            context,
+            path: root,
+            label: fallbackIsReinforced
+                ? 'this folder → Reinforced'
+                : 'this folder → Learning',
+            note: 'follows the picker above',
+            highlighted: true,
+          ),
+          const SizedBox(height: 6),
+          _row(
+            context,
+            path: '$root$sep${InboxService.learningFolder}',
+            label: 'always Learning',
+            note: 'ignores the picker',
+            highlighted: !fallbackIsReinforced,
+          ),
+          const SizedBox(height: 6),
+          _row(
+            context,
+            path: '$root$sep${InboxService.reinforcedFolder}',
+            label: 'always Reinforced',
+            note: 'ignores the picker',
+            highlighted: fallbackIsReinforced,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _row(
+    BuildContext context, {
+    required String path,
+    required String label,
+    required String note,
+    required bool highlighted,
+  }) {
+    final accent = highlighted
+        ? AppColors.antiqueGold
+        : AppColors.mutedInk(context);
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(top: 2),
+          child: Icon(
+            highlighted ? Icons.folder : Icons.folder_outlined,
+            size: 14,
+            color: accent,
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                path,
+                style: GoogleFonts.robotoMono(
+                  color: AppColors.ink(context),
+                  fontSize: 11,
+                  height: 1.35,
+                ),
+              ),
+              Text(
+                '$label · $note',
+                style: GoogleFonts.inter(
+                  color: accent,
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+        IconButton(
+          tooltip: 'Copy path',
+          visualDensity: VisualDensity.compact,
+          iconSize: 15,
+          icon: Icon(Icons.copy_outlined, color: AppColors.mutedInk(context)),
+          onPressed: () async {
+            await Clipboard.setData(ClipboardData(text: path));
+            if (!context.mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                  content: Text('Path copied'),
+                  duration: Duration(seconds: 2)),
+            );
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _hintBox(BuildContext context, String text) => Container(
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+        decoration: BoxDecoration(
+          color: AppColors.inset(context),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: AppColors.hairline(context)),
+        ),
+        child: Text(
+          text,
+          style: GoogleFonts.inter(
+            color: AppColors.mutedInk(context),
+            fontSize: 11.5,
+          ),
+        ),
       );
 }
 
@@ -380,6 +544,20 @@ class _Report extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _Banner(ok: !bad, text: result.summary),
+        // Corrections are listed in full. The model changed what you wrote,
+        // and you should be able to see whether you agree.
+        for (final c in result.corrections)
+          Padding(
+            padding: const EdgeInsets.only(top: 5, left: 8),
+            child: Text(
+              '• $c',
+              style: GoogleFonts.notoSerifKr(
+                color: AppColors.mutedInk(context),
+                fontSize: 11.5,
+                height: 1.4,
+              ),
+            ),
+          ),
         // The specific reason matters here — "folder not found" and "that file
         // is still syncing" need very different responses.
         for (final e in result.errors)

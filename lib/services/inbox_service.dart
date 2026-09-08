@@ -21,6 +21,14 @@ import 'storage_service.dart';
 ///     import, so the phone has nothing to assemble.
 ///   * full JSON, if something else already did that work.
 ///
+/// Which pile a word lands in is decided by WHERE the file is, so the choice
+/// travels with the capture instead of living in a setting that can change
+/// before the import runs:
+///
+///   * `<inbox>/reinforced/` — always reinforced
+///   * `<inbox>/learning/`   — always learning
+///   * `<inbox>/`            — whatever [defaultStatus] says at import time
+///
 /// A file is consumed exactly once: it is moved into `processed/` only after
 /// its words are in the box, so a crash mid-import means the file is simply
 /// picked up again next launch.
@@ -31,9 +39,30 @@ class InboxService {
   static const _kFolder = 'inbox_folder';
   static const _kStatus = 'inbox_status';
 
-  /// Where Google Drive for desktop mounts by default. Only a starting point —
-  /// the real path is whatever the user sets in Settings.
-  static const defaultFolder = r'G:\My Drive\Maldari\inbox';
+  /// Subfolder names that force a status. Two spellings of the second one, so
+  /// the folder name isn't a trap.
+  static const learningFolder = 'learning';
+  static const reinforcedFolder = 'reinforced';
+  static const _reinforcedAlias = 'reinforcement';
+
+  /// Set while the settings panel is open, and honoured ONLY by the automatic
+  /// import.
+  ///
+  /// The window-focus import is a race against whoever is configuring it:
+  /// clicking away to the phone and back mid-setup used to consume the inbox
+  /// using whatever status happened to be saved at that instant, which is not
+  /// what the person staring at the half-configured screen intended. Manual
+  /// imports are never paused — pressing the button is unambiguous.
+  bool autoImportPaused = false;
+
+  /// Where iCloud for Windows puts iCloud Drive on a default install. Only a
+  /// hint — the real path is whatever the user sets in Settings.
+  ///
+  /// iCloud rather than another service because of an iOS limitation, not a
+  /// preference: a shortcut can only write to a folder unattended if that
+  /// folder is in iCloud Drive. Anywhere else, Save File has to ask the user
+  /// where to put it on every single capture.
+  static const defaultFolder = r'C:\Users\<you>\iCloudDrive\Maldari';
 
   Future<String?> folder() async {
     final p = await SharedPreferences.getInstance();
@@ -51,9 +80,8 @@ class InboxService {
     await p.remove(_kFolder);
   }
 
-  /// Which pile phone words land in. A plain word list carries no status, and
-  /// asking the phone to express one is exactly the complexity this design
-  /// removes — so it is a setting here instead.
+  /// Where a word goes when nothing more specific says otherwise — a file
+  /// dropped straight in the inbox rather than in one of the two subfolders.
   Future<WordStatus> defaultStatus() async {
     final p = await SharedPreferences.getInstance();
     return p.getString(_kStatus) == 'reinforcement'
@@ -67,6 +95,44 @@ class InboxService {
         _kStatus, s == WordStatus.reinforcement ? 'reinforcement' : 'learning');
   }
 
+  /// Creates the two status subfolders, each with a note inside.
+  ///
+  /// The note is not decoration: an empty folder does not reliably sync
+  /// through iCloud — it never appears in the phone's folder picker — so a
+  /// folder we want the phone to see must contain a file. `.md` is ignored by
+  /// the importer, which is why it is safe to leave there.
+  Future<void> ensureFolders() async {
+    final path = await folder();
+    if (path == null) return;
+    final root = Directory(path);
+    if (!root.existsSync()) return;
+
+    for (final entry in const [
+      (learningFolder, 'always imported as Learning'),
+      (reinforcedFolder, 'always imported as Reinforced'),
+    ]) {
+      try {
+        final dir =
+            Directory('${root.path}${Platform.pathSeparator}${entry.$1}');
+        if (!dir.existsSync()) dir.createSync(recursive: true);
+        final note = File('${dir.path}${Platform.pathSeparator}README.md');
+        if (!note.existsSync()) {
+          note.writeAsStringSync(
+            '# ${entry.$1}\n\n'
+            'Words saved here are ${entry.$2}, whatever the "Words arrive as" '
+            'setting says.\n\n'
+            'Point a second Shortcut at this folder and choosing the pile '
+            'becomes which icon you tap.\n\n'
+            'This file only exists so the folder syncs — an empty folder does '
+            'not reliably appear on the phone. Maldari ignores it.\n',
+          );
+        }
+      } catch (e) {
+        debugPrint('[InboxService] could not create ${entry.$1}: $e');
+      }
+    }
+  }
+
   /// Reads every file in the inbox and adds the words it doesn't already
   /// have, asking the cloud model for anything the file didn't carry. Safe to
   /// call as often as you like — importing the same file twice adds nothing,
@@ -77,19 +143,13 @@ class InboxService {
       return const InboxResult(configured: false);
     }
 
-    final dir = Directory(path);
-    if (!dir.existsSync()) {
-      return InboxResult(
-        errors: ['Folder not found: $path'],
-      );
+    final root = Directory(path);
+    if (!root.existsSync()) {
+      return InboxResult(errors: ['Folder not found: $path']);
     }
 
-    final files = <File>[
-      for (final e in dir.listSync())
-        if (e is File && _isCandidate(e)) e,
-    ]..sort((a, b) => a.path.compareTo(b.path));
-
-    if (files.isEmpty) return const InboxResult();
+    final fallbackStatus = await defaultStatus();
+    final sources = _sourcesUnder(root);
 
     final box = StorageService.instance.box;
     // Dedupe on the same key the merge tool uses, so an import can't create
@@ -98,100 +158,179 @@ class InboxService {
       for (final w in box.values) w.hangul.trim().toLowerCase(),
     };
 
-    var added = 0;
+    var addedLearning = 0;
+    var addedReinforced = 0;
     var skipped = 0;
     var handled = 0;
     var defined = 0;
     final errors = <String>[];
-    final fallbackStatus = await defaultStatus();
+    final corrections = <String>[];
 
-    for (final file in files) {
-      List<Map<String, dynamic>> entries;
-      try {
-        final raw = await file.readAsString();
-        entries = _parse(raw);
-      } catch (e) {
-        // Most often a file still syncing — leave it alone and try again on
-        // the next run rather than importing half of it.
-        errors.add('${_name(file)}: ${_short(e)}');
-        continue;
-      }
+    for (final source in sources) {
+      final files = <File>[
+        for (final e in source.dir.listSync())
+          if (e is File && _isCandidate(e)) e,
+      ]..sort((a, b) => a.path.compareTo(b.path));
 
-      // A plain word list arrives with nothing but hangul. Ask Claude for the
-      // rest before anything is written, so a word is either complete or not
-      // imported at all.
-      final bare = [
-        for (final e in entries)
-          if (_needsDefining(e)) (e['hangul'] ?? '').toString().trim(),
-      ]..removeWhere((w) => w.isEmpty);
-
-      if (bare.isNotEmpty && await ClaudeService.instance.isConfigured) {
+      for (final file in files) {
+        List<Map<String, dynamic>> entries;
+        final ignoredLines = <String>[];
         try {
-          final byWord = <String, Map<String, dynamic>>{
-            for (final d in await ClaudeService.instance.define(bare))
-              (d['hangul'] ?? '').toString().trim(): d,
-          };
-          for (final e in entries) {
-            final match = byWord[(e['hangul'] ?? '').toString().trim()];
-            if (match == null) continue;
-            for (final field in const [
-              'romanization',
-              'englishMeaning',
-              'partOfSpeech',
-              'politeForm',
-            ]) {
-              final v = (match[field] ?? '').toString();
-              if ((e[field] ?? '').toString().trim().isEmpty && v.isNotEmpty) {
-                e[field] = v;
-              }
-            }
-            defined++;
-          }
+          entries = _parse(await file.readAsString(), ignoredLines);
         } catch (e) {
-          // Import the bare words anyway: losing the capture would be worse
-          // than importing a word you can auto-fill later.
-          errors.add('${_name(file)}: definitions unavailable — ${_short(e)}');
-        }
-      }
-
-      var wroteAny = false;
-      for (final entry in entries) {
-        final hangul = (entry['hangul'] ?? '').toString().trim();
-        if (hangul.isEmpty) continue;
-        final key = hangul.toLowerCase();
-        if (!known.add(key)) {
-          skipped++;
+          // Most often a file still syncing — leave it alone and try again on
+          // the next run rather than importing half of it.
+          errors.add('${_name(file)}: ${_short(e)}');
           continue;
         }
-        try {
-          final word = _wordFrom(entry, hangul, fallbackStatus);
-          await box.put(word.id, word);
-          added++;
-          wroteAny = true;
-        } catch (e) {
-          known.remove(key);
-          errors.add('$hangul: ${_short(e)}');
-        }
-      }
 
-      // Only retire the file once its words are actually in the box.
-      if (wroteAny || entries.isNotEmpty) {
-        final moved = await _archive(file, dir);
-        if (moved) handled++;
+        // Loud, not silent: a line that was not numbered is a word the user
+        // believes they captured, and it is about to not exist.
+        if (ignoredLines.isNotEmpty) {
+          final shown = ignoredLines.take(3).join(', ');
+          errors.add(
+            '${_name(file)}: ignored ${ignoredLines.length} unnumbered '
+            'line${ignoredLines.length == 1 ? '' : 's'} ($shown'
+            '${ignoredLines.length > 3 ? ', …' : ''}) — number every line',
+          );
+        }
+
+        defined += await _define(entries, file, errors, corrections);
+
+        var wroteAny = false;
+        for (final entry in entries) {
+          final hangul = (entry['hangul'] ?? '').toString().trim();
+          if (hangul.isEmpty) continue;
+          final key = hangul.toLowerCase();
+          if (!known.add(key)) {
+            skipped++;
+            continue;
+          }
+          try {
+            final word = _wordFrom(
+              entry,
+              hangul,
+              fallbackStatus,
+              forced: source.forced,
+            );
+            await box.put(word.id, word);
+            if (word.status == WordStatus.reinforcement) {
+              addedReinforced++;
+            } else {
+              addedLearning++;
+            }
+            wroteAny = true;
+          } catch (e) {
+            known.remove(key);
+            errors.add('$hangul: ${_short(e)}');
+          }
+        }
+
+        // Only retire the file once its words are actually in the box — or
+        // once it is clear there were never any to find. A file that parsed to
+        // nothing (an empty save from a misconfigured shortcut, say) would
+        // otherwise sit in the inbox being re-read forever, so it is retired
+        // too — but only after it has been still for a while, in case what we
+        // read was a file the sync client had not finished writing.
+        final stale = entries.isEmpty && _settled(file);
+        if (wroteAny || entries.isNotEmpty || stale) {
+          if (await _archive(file, root)) handled++;
+        }
       }
     }
 
     // Words that just landed must survive a crash a second later, not in 400
     // milliseconds' time.
-    if (added > 0) await StorageService.instance.flushAll();
+    if (addedLearning + addedReinforced > 0) {
+      await StorageService.instance.flushAll();
+    }
 
     return InboxResult(
-      added: added,
+      addedLearning: addedLearning,
+      addedReinforced: addedReinforced,
       skipped: skipped,
       files: handled,
       defined: defined,
+      corrections: corrections,
       errors: errors,
     );
+  }
+
+  /// The inbox root plus whichever status subfolders exist, each carrying the
+  /// status it forces. `processed/` is deliberately not among them.
+  List<({Directory dir, WordStatus? forced})> _sourcesUnder(Directory root) {
+    final out = <({Directory dir, WordStatus? forced})>[
+      (dir: root, forced: null),
+    ];
+    const named = <String, WordStatus>{
+      learningFolder: WordStatus.learning,
+      reinforcedFolder: WordStatus.reinforcement,
+      _reinforcedAlias: WordStatus.reinforcement,
+    };
+    for (final entry in named.entries) {
+      final dir = Directory('${root.path}${Platform.pathSeparator}${entry.key}');
+      if (dir.existsSync()) out.add((dir: dir, forced: entry.value));
+    }
+    return out;
+  }
+
+  /// Fills in whatever the file didn't carry. Returns how many words were
+  /// completed; on failure the bare words are still imported, because losing
+  /// the capture would be worse than importing a word you can auto-fill later.
+  Future<int> _define(
+    List<Map<String, dynamic>> entries,
+    File file,
+    List<String> errors,
+    List<String> corrections,
+  ) async {
+    final bare = [
+      for (final e in entries)
+        if (_needsDefining(e)) (e['hangul'] ?? '').toString().trim(),
+    ]..removeWhere((w) => w.isEmpty);
+
+    if (bare.isEmpty || !await ClaudeService.instance.isConfigured) return 0;
+
+    try {
+      // Keyed on the ECHOED input, not on the answer: a corrected word comes
+      // back under a spelling that was never sent, and matching on that would
+      // quietly drop exactly the entries that needed the most help.
+      final byInput = <String, Map<String, dynamic>>{
+        for (final d in await ClaudeService.instance.define(bare))
+          (d['input'] ?? d['hangul'] ?? '').toString().trim(): d,
+      };
+      var count = 0;
+      for (final e in entries) {
+        final typed = (e['hangul'] ?? '').toString().trim();
+        final match = byInput[typed];
+        if (match == null) continue;
+
+        // Adopt the corrected spelling. This happens before the collection is
+        // checked for duplicates, so a typo of a word you already have is
+        // recognised as that word rather than added beside it.
+        final fixed = (match['hangul'] ?? '').toString().trim();
+        if (fixed.isNotEmpty && fixed != typed) {
+          e['hangul'] = fixed;
+          corrections.add('$typed → $fixed');
+        }
+
+        for (final field in const [
+          'romanization',
+          'englishMeaning',
+          'partOfSpeech',
+          'politeForm',
+        ]) {
+          final v = (match[field] ?? '').toString();
+          if ((e[field] ?? '').toString().trim().isEmpty && v.isNotEmpty) {
+            e[field] = v;
+          }
+        }
+        count++;
+      }
+      return count;
+    } catch (e) {
+      errors.add('${_name(file)}: definitions unavailable — ${_short(e)}');
+      return 0;
+    }
   }
 
   /// Files worth looking at. Extension-tolerant on purpose — one fewer thing
@@ -206,10 +345,19 @@ class InboxService {
         !name.contains('.');
   }
 
-  /// Accepts JSON — a bare array or `{"words": [...]}` — or a plain list of
-  /// words, one per line. The plain list is what the phone actually sends;
-  /// JSON is for anything that already knows the full shape.
-  List<Map<String, dynamic>> _parse(String raw) {
+  /// A numbered line: `1. 가다`, `2) 가다`, `3 가다`, `4.가다`.
+  ///
+  /// The number is the thing that makes a line a word. Requiring it is a
+  /// deliberate filter: a captured file is whatever was in a text field on a
+  /// phone, and without a marker there is no way to tell a vocabulary word
+  /// from a stray line, an autocorrect artefact or a note to self. Numbering
+  /// is cheap to type and unambiguous to read.
+  static final RegExp _numbered = RegExp(r'^\s*\d+\s*[.)\]:]?\s*(.+)$');
+
+  /// Accepts JSON — a bare array or `{"words": [...]}` — or a NUMBERED list of
+  /// words, one per line. Anything unnumbered is collected into [ignored] for
+  /// the caller to report; it is never imported.
+  List<Map<String, dynamic>> _parse(String raw, List<String> ignored) {
     final trimmed = raw.trim();
     if (trimmed.isEmpty) return const [];
 
@@ -226,16 +374,19 @@ class InboxService {
       ];
     }
 
-    // Plain text. Split on lines and commas so either habit works, and drop
-    // anything that isn't a word — bullet characters, numbering, stray dashes.
-    return [
-      for (final line in trimmed.split(RegExp(r'[\r\n,]+')))
-        if (_cleanWord(line).isNotEmpty) {'hangul': _cleanWord(line)},
-    ];
+    final out = <Map<String, dynamic>>[];
+    for (final line in trimmed.split(RegExp(r'[\r\n]+'))) {
+      if (line.trim().isEmpty) continue;
+      final match = _numbered.firstMatch(line);
+      final word = (match?.group(1) ?? '').trim();
+      if (match == null || word.isEmpty) {
+        ignored.add(line.trim());
+        continue;
+      }
+      out.add({'hangul': word});
+    }
+    return out;
   }
-
-  static String _cleanWord(String line) =>
-      line.trim().replaceAll(RegExp(r'^[-*•\d.)\s]+'), '').trim();
 
   /// True when an entry is just a word with no reading or meaning yet.
   static bool _needsDefining(Map<String, dynamic> e) =>
@@ -245,8 +396,9 @@ class InboxService {
   VocabWord _wordFrom(
     Map<String, dynamic> e,
     String hangul,
-    WordStatus fallbackStatus,
-  ) {
+    WordStatus fallbackStatus, {
+    WordStatus? forced,
+  }) {
     final pos = (e['partOfSpeech'] ?? '').toString().trim();
     final status = (e['status'] ?? '').toString().trim().toLowerCase();
 
@@ -263,23 +415,26 @@ class InboxService {
           PartsOfSpeech.all.contains(pos) ? pos : PartsOfSpeech.noun,
       politeForm: (e['politeForm'] ?? '').toString().trim(),
       dateAdded: DateTime.now(),
-      // An explicit status in the file wins; a plain word list has none, and
-      // takes the pile chosen in Settings.
-      status: switch (status) {
-        'reinforcement' || 'reinforced' => WordStatus.reinforcement,
-        'learning' => WordStatus.learning,
-        _ => fallbackStatus,
-      },
+      // Folder beats file beats setting. The folder is the most deliberate of
+      // the three — you chose it at capture time, one tap on the phone — and
+      // the setting is the least, since it can change before the import runs.
+      status: forced ??
+          switch (status) {
+            'reinforcement' || 'reinforced' => WordStatus.reinforcement,
+            'learning' => WordStatus.learning,
+            _ => fallbackStatus,
+          },
     );
   }
 
   int _seq = 0;
 
-  /// Moves a consumed file into `processed/`. Never deletes: the same rule the
-  /// rest of the app follows, and a mis-parsed import is recoverable by hand.
-  Future<bool> _archive(File file, Directory dir) async {
+  /// Moves a consumed file into the root's `processed/`, wherever it came
+  /// from. Never deletes: the same rule the rest of the app follows, and a
+  /// mis-parsed import is recoverable by hand.
+  Future<bool> _archive(File file, Directory root) async {
     try {
-      final done = Directory('${dir.path}${Platform.pathSeparator}processed');
+      final done = Directory('${root.path}${Platform.pathSeparator}processed');
       if (!done.existsSync()) done.createSync(recursive: true);
       var target = '${done.path}${Platform.pathSeparator}${_name(file)}';
       if (File(target).existsSync()) {
@@ -295,6 +450,17 @@ class InboxService {
     }
   }
 
+  /// True when a file has not been touched for a couple of minutes — long
+  /// enough that a sync in progress would have finished.
+  static bool _settled(File f) {
+    try {
+      return DateTime.now().difference(f.lastModifiedSync()) >
+          const Duration(minutes: 2);
+    } catch (_) {
+      return false;
+    }
+  }
+
   static String _name(File f) => f.path.split(Platform.pathSeparator).last;
 
   static String _short(Object e) {
@@ -306,16 +472,23 @@ class InboxService {
 @immutable
 class InboxResult {
   const InboxResult({
-    this.added = 0,
+    this.addedLearning = 0,
+    this.addedReinforced = 0,
     this.skipped = 0,
     this.files = 0,
     this.defined = 0,
+    this.corrections = const [],
     this.errors = const [],
     this.configured = true,
   });
 
-  /// Words written to the collection.
-  final int added;
+  /// Counted separately, because one import can now land in both piles — and
+  /// which pile a word went to is exactly the thing that is hard to notice
+  /// and tedious to undo.
+  final int addedLearning;
+  final int addedReinforced;
+
+  int get added => addedLearning + addedReinforced;
 
   /// Words the collection already had.
   final int skipped;
@@ -325,6 +498,11 @@ class InboxResult {
 
   /// Words the cloud model filled in on the way through.
   final int defined;
+
+  /// Spellings the model changed, as "typed → kept". Surfaced rather than
+  /// applied silently: a correction is a judgement about what you meant, and
+  /// you should get to see the ones it made.
+  final List<String> corrections;
 
   final List<String> errors;
 
@@ -338,8 +516,10 @@ class InboxResult {
     if (!configured) return 'No inbox folder set.';
     if (isEmpty) return 'Nothing new in the inbox.';
     final parts = <String>[
-      if (added > 0) '$added added',
+      if (addedLearning > 0) '$addedLearning added to Learning',
+      if (addedReinforced > 0) '$addedReinforced added to Reinforced',
       if (defined > 0) '$defined defined',
+      if (corrections.isNotEmpty) '${corrections.length} corrected',
       if (skipped > 0) '$skipped already known',
       if (errors.isNotEmpty) '${errors.length} problem'
           '${errors.length == 1 ? '' : 's'}',

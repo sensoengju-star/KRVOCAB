@@ -72,6 +72,11 @@ class ClaudeService {
             'items': {
               'type': 'object',
               'properties': {
+                // The word EXACTLY as it was typed, echoed back so the caller
+                // can match the answer to the question. Without it a
+                // correction is unmatchable: the reply comes back under a
+                // spelling the caller never sent.
+                'input': {'type': 'string'},
                 'hangul': {'type': 'string'},
                 'romanization': {'type': 'string'},
                 'englishMeaning': {'type': 'string'},
@@ -89,6 +94,7 @@ class ClaudeService {
                 'politeForm': {'type': 'string'},
               },
               'required': [
+                'input',
                 'hangul',
                 'romanization',
                 'englishMeaning',
@@ -104,13 +110,25 @@ class ClaudeService {
       };
 
   static const _system =
-      'You are a Korean dictionary for a TOPIK I-II learner. For each word '
-      'given, return the dictionary form in Hangul, its revised-romanization '
-      'reading, a short English meaning, and the part of speech. For verbs and '
-      'descriptive verbs only, also give the present polite 해요체 form; leave '
-      'politeForm as an empty string for everything else. Return one entry per '
-      'word given, in the same order. If a word is misspelled, correct it to '
-      'the nearest real Korean word rather than inventing a meaning.';
+      'You are a Korean dictionary for a TOPIK I-II learner. The words come '
+      'from someone typing quickly on a phone, so treat every one as possibly '
+      'mistyped.\n\n'
+      'For each word given, return:\n'
+      '- input: the word EXACTLY as it was given to you, character for '
+      'character, even when it is wrong. This is how your answer is matched '
+      'back to the question, so it must never be cleaned up or corrected.\n'
+      '- hangul: the correct dictionary form. Fix obvious typos (a wrong or '
+      'missing jamo, a doubled character) to the nearest real Korean word, and '
+      'convert a conjugated form to its dictionary form — 갔어요 becomes 가다. '
+      'If the word is already correct, repeat it unchanged. Never invent a '
+      'word: if you cannot tell what was meant, return the input as-is and '
+      'give it the best meaning you can.\n'
+      '- romanization: revised romanization of hangul.\n'
+      '- englishMeaning: a short gloss.\n'
+      '- partOfSpeech: one of the listed values.\n'
+      '- politeForm: the present polite 해요체 form for verbs and descriptive '
+      'verbs only; an empty string for everything else.\n\n'
+      'Return exactly one entry per word given, in the same order.';
 
   /// Defines [words], in batches. Returns one map per word, using the same
   /// field names as [VocabWord] so the caller can construct directly.
@@ -202,12 +220,20 @@ class ClaudeService {
     }
   }
 
-  /// A one-word round trip, for the Test button in Settings.
+  /// A one-word round trip, for the Test button in Settings. Deliberately a
+  /// misspelling: it proves the key, the model AND that correction is working.
   Future<String> test() async {
-    final result = await define(['안녕하세요']);
+    final result = await define(['안뇽하세요']);
     if (result.isEmpty) throw const ClaudeException('Empty reply.');
     final w = result.first;
-    return '${w['hangul']} — ${w['englishMeaning']}';
+    final typed = (w['input'] ?? '').toString().trim();
+    final fixed = (w['hangul'] ?? '').toString().trim();
+    final gloss = (w['englishMeaning'] ?? '').toString().trim();
+    // Show the correction when it happened: it proves the typo-fixing works,
+    // not just that the key does.
+    return typed.isNotEmpty && typed != fixed
+        ? 'corrected $typed → $fixed ($gloss)'
+        : '$fixed — $gloss';
   }
 
   String _readError(http.Response res) {
