@@ -174,6 +174,7 @@ class InboxService {
       ]..sort((a, b) => a.path.compareTo(b.path));
 
       for (final file in files) {
+        final label = _label(file, root);
         List<Map<String, dynamic>> entries;
         final ignoredLines = <String>[];
         try {
@@ -181,7 +182,7 @@ class InboxService {
         } catch (e) {
           // Most often a file still syncing — leave it alone and try again on
           // the next run rather than importing half of it.
-          errors.add('${_name(file)}: ${_short(e)}');
+          errors.add('$label: ${_short(e)}');
           continue;
         }
 
@@ -190,13 +191,13 @@ class InboxService {
         if (ignoredLines.isNotEmpty) {
           final shown = ignoredLines.take(3).join(', ');
           errors.add(
-            '${_name(file)}: ignored ${ignoredLines.length} unnumbered '
+            '$label: ignored ${ignoredLines.length} unnumbered '
             'line${ignoredLines.length == 1 ? '' : 's'} ($shown'
             '${ignoredLines.length > 3 ? ', …' : ''}) — number every line',
           );
         }
 
-        defined += await _define(entries, file, errors, corrections);
+        defined += await _define(entries, label, errors, corrections);
 
         var wroteAny = false;
         for (final entry in entries) {
@@ -227,14 +228,18 @@ class InboxService {
           }
         }
 
-        // Only retire the file once its words are actually in the box — or
-        // once it is clear there were never any to find. A file that parsed to
-        // nothing (an empty save from a misconfigured shortcut, say) would
-        // otherwise sit in the inbox being re-read forever, so it is retired
-        // too — but only after it has been still for a while, in case what we
-        // read was a file the sync client had not finished writing.
-        final stale = entries.isEmpty && _settled(file);
-        if (wroteAny || entries.isNotEmpty || stale) {
+        // Retire the file once its words are in the box — or once it is clear
+        // there were never any to find.
+        //
+        // Two different "no words" cases, and conflating them was a bug. A
+        // file with lines we READ but rejected (unnumbered, say) is fully
+        // readable and never going to improve: retire it now, so its
+        // complaint is made exactly once instead of on every import until a
+        // timer expires. A file that came back completely empty might be one
+        // the sync client has not finished writing, so that one waits.
+        final rejected = entries.isEmpty && ignoredLines.isNotEmpty;
+        final blank = entries.isEmpty && ignoredLines.isEmpty && _settled(file);
+        if (wroteAny || entries.isNotEmpty || rejected || blank) {
           if (await _archive(file, root)) handled++;
         }
       }
@@ -285,7 +290,7 @@ class InboxService {
   /// the capture would be worse than importing a word you can auto-fill later.
   Future<int> _define(
     List<Map<String, dynamic>> entries,
-    File file,
+    String label,
     List<String> errors,
     List<String> corrections,
   ) async {
@@ -334,7 +339,7 @@ class InboxService {
       }
       return count;
     } catch (e) {
-      errors.add('${_name(file)}: definitions unavailable — ${_short(e)}');
+      errors.add('$label: definitions unavailable — ${_short(e)}');
       return 0;
     }
   }
@@ -468,6 +473,22 @@ class InboxService {
   }
 
   static String _name(File f) => f.path.split(Platform.pathSeparator).last;
+
+  /// How a file is named in reports: relative to the inbox root, so a file in
+  /// a status subfolder is distinguishable from one beside it in the root.
+  ///
+  /// Two captures of the same word land as `서성이다.txt` and
+  /// `reinforced. 서성이다.txt`, and a report naming only the last path
+  /// segment makes those look like the same file — which turns "this one was
+  /// rejected" into "your numbering did not work".
+  static String _label(File f, Directory root) {
+    final prefix = root.path.endsWith(Platform.pathSeparator)
+        ? root.path
+        : '${root.path}${Platform.pathSeparator}';
+    return f.path.startsWith(prefix)
+        ? f.path.substring(prefix.length)
+        : _name(f);
+  }
 
   static String _short(Object e) {
     final s = e.toString();
