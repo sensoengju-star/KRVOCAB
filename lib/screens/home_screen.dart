@@ -352,14 +352,49 @@ Future<void> _importFromPhone(BuildContext context, WidgetRef ref) async {
   if (result.changedAnything) ref.read(vocabProvider.notifier).refresh();
   if (!context.mounted) return;
 
+  // An empty inbox right after a capture usually means the file is still on
+  // its way down: the sync client gives no signal when it lands, and pressing
+  // the button again by hand is the user doing a timer's job. So look once
+  // more, shortly.
+  final willRetry = result.configured && result.isEmpty;
+
+  _say(
+    messenger,
+    result.configured
+        ? (willRetry
+            ? '${result.summary} Checking again in 10 seconds…'
+            : result.summary)
+        : 'No inbox folder set — add one in Settings',
+  );
+
+  if (!willRetry) return;
+
+  _retry?.cancel();
+  _retry = Timer(const Duration(seconds: 10), () async {
+    final second = await InboxService.instance.importNow();
+    if (second.changedAnything) ref.read(vocabProvider.notifier).refresh();
+    if (!context.mounted) return;
+    _say(
+      messenger,
+      second.isEmpty ? 'Still nothing in the inbox.' : second.summary,
+    );
+  });
+}
+
+/// The pending second look. Held so a run of presses can't stack up timers.
+Timer? _retry;
+
+/// Shows a message that closes itself.
+///
+/// ScaffoldMessenger will not start its own dismiss timer for a snack bar
+/// carrying an action while accessible navigation is on, and a bar that never
+/// leaves sits over the nav bar forever. Closing it ourselves sidesteps the
+/// whole question.
+void _say(ScaffoldMessengerState messenger, String text) {
   messenger.clearSnackBars();
   final bar = messenger.showSnackBar(
     SnackBar(
-      content: Text(
-        result.configured
-            ? result.summary
-            : 'No inbox folder set — add one in Settings',
-      ),
+      content: Text(text),
       duration: const Duration(seconds: 4),
       showCloseIcon: true,
     ),
