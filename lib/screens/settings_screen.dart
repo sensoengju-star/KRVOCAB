@@ -19,6 +19,7 @@ import '../services/tts_service.dart';
 import '../theme/app_colors.dart';
 import '../widgets/elevenlabs_settings.dart';
 import '../widgets/gold_button.dart';
+import '../widgets/inbox_settings.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -348,6 +349,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
           ),
         ),
+        const GoldDiamondDivider(),
+
+        _section(context, 'Words from your phone'),
+        const InboxSettings(),
         const GoldDiamondDivider(),
 
         _section(context, 'Story narration'),

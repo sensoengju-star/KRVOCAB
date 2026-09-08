@@ -10,6 +10,8 @@ import 'providers/theme_provider.dart';
 import 'screens/home_screen.dart';
 import 'screens/onboarding_screen.dart';
 import 'services/llm_launcher.dart';
+import 'providers/vocab_provider.dart';
+import 'services/inbox_service.dart';
 import 'services/storage_service.dart';
 import 'services/tts_service.dart';
 import 'theme/app_theme.dart';
@@ -42,6 +44,9 @@ Future<void> main() async {
 
   runApp(const ProviderScope(child: MaldariApp()));
 }
+
+/// Lets the inbox report what it picked up, from outside any Scaffold.
+final _messengerKey = GlobalKey<ScaffoldMessengerState>();
 
 class MaldariApp extends ConsumerStatefulWidget {
   const MaldariApp({super.key});
@@ -83,7 +88,38 @@ class _MaldariAppState extends ConsumerState<MaldariApp>
       },
     );
     _loadOnboarding();
+
+    // Words captured on the phone land here on the way in. After the first
+    // frame, so a slow or cloud-backed folder can never hold up startup.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _importInbox());
   }
+
+  /// Pulls in anything the phone dropped in the synced folder.
+  ///
+  /// Runs at launch and whenever the window is focused again, so switching
+  /// back from the phone is enough to see the new words — there is nothing to
+  /// press. Silent when there is nothing to report.
+  Future<void> _importInbox() async {
+    if (_importing) return;
+    _importing = true;
+    try {
+      final result = await InboxService.instance.importNow();
+      if (!mounted || !result.changedAnything) return;
+      // The list reads the box at construction, so it needs telling.
+      ref.read(vocabProvider.notifier).refresh();
+      _messengerKey.currentState?.showSnackBar(
+        SnackBar(
+          content: Text('Imported from your phone — ${result.summary}'),
+          duration: const Duration(seconds: 4),
+          showCloseIcon: true,
+        ),
+      );
+    } finally {
+      _importing = false;
+    }
+  }
+
+  bool _importing = false;
 
   Future<void> _shutdown() async {
     if (_shutdownStarted) return;
@@ -107,7 +143,11 @@ class _MaldariAppState extends ConsumerState<MaldariApp>
     // rather than trusting that we'll be asked politely later.
     if (state != AppLifecycleState.resumed) {
       unawaited(StorageService.instance.flushAll());
+      return;
     }
+    // Back in the foreground — check whether the phone sent anything while we
+    // were away.
+    unawaited(_importInbox());
   }
 
   Future<void> _loadOnboarding() async {
@@ -135,6 +175,7 @@ class _MaldariAppState extends ConsumerState<MaldariApp>
       theme: buildAppTheme(),
       darkTheme: buildDarkAppTheme(),
       themeMode: mode,
+      scaffoldMessengerKey: _messengerKey,
       home: _seenOnboarding == null
           ? const _Splash()
           : (_seenOnboarding!
