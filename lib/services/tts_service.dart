@@ -151,15 +151,20 @@ class TtsService {
     }
   }
 
-  /// What a vocabulary entry should sound like.
-  ///
-  /// Prefers the 해요체 form when the word has one: 가요 is what a learner
-  /// actually says, while the -다 citation form is a dictionary convention
-  /// nobody speaks in a sentence.
+  /// The form a learner actually SAYS: 해요체 when the word has one, since
+  /// the -다 citation form is a dictionary convention nobody utters in a
+  /// sentence.
   Future<void> speakWord(VocabWord word) {
     final polite = word.politeForm.trim();
     return speak(polite.isNotEmpty ? polite : word.hangul);
   }
+
+  /// The form the word is FILED under: 가다, never 가요.
+  ///
+  /// This is what review speaks. A flashcard is testing recall of the entry
+  /// as written on the card, so hearing a conjugation the card doesn't show
+  /// makes the prompt and the audio disagree.
+  Future<void> speakDictionaryForm(VocabWord word) => speak(word.hangul);
 
   Future<void> stop() async {
     // Skip the platform hop when nothing is playing — this is called on every

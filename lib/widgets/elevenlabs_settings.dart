@@ -8,8 +8,8 @@ import '../services/narration_service.dart';
 import '../theme/app_colors.dart';
 import 'gold_button.dart';
 
-/// Settings block for story narration: which engine reads stories, and the
-/// ElevenLabs credentials when that's the one chosen.
+/// Settings block for story narration: how much plays per press, and the
+/// ElevenLabs credentials that narration runs on.
 ///
 /// The key is held in SharedPreferences on this machine only. It is never
 /// written into the project, so it cannot end up in the public repo.
@@ -29,6 +29,8 @@ class _ElevenLabsSettingsState extends ConsumerState<ElevenLabsSettings> {
   String? _status;
   bool _statusIsError = false;
   int _cacheBytes = 0;
+  double _speed = ElevenLabsService.defaultSpeed;
+  double _stability = ElevenLabsService.defaultStability;
   List<({String id, String name})> _voices = const [];
 
   @override
@@ -48,8 +50,16 @@ class _ElevenLabsSettingsState extends ConsumerState<ElevenLabsSettings> {
     final svc = ElevenLabsService.instance;
     _key.text = await svc.apiKey() ?? '';
     _voice.text = await svc.voiceId();
+    final rate = await svc.speed();
+    final steadiness = await svc.stability();
     final size = await svc.cacheSize();
-    if (mounted) setState(() => _cacheBytes = size);
+    if (mounted) {
+      setState(() {
+        _cacheBytes = size;
+        _speed = rate;
+        _stability = steadiness;
+      });
+    }
   }
 
   void _report(String message, {bool error = false}) {
@@ -126,17 +136,15 @@ class _ElevenLabsSettingsState extends ConsumerState<ElevenLabsSettings> {
 
   @override
   Widget build(BuildContext context) {
-    final source = ref.watch(narrationSourceProvider);
-    final usingCloud = source == NarrationSource.elevenLabs;
+    final mode = ref.watch(narrationModeProvider);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text(
-          'Stories can be read aloud by the free local voice, or by '
-          'ElevenLabs for far better Korean. This choice applies to story '
-          'narration ONLY — tapping a word and the flashcard answer always '
-          'use the free local voice, so nothing else spends credits.',
+          'Stories are narrated by ElevenLabs, which needs the API key below. '
+          'This is the ONLY thing that spends credits — tapping a word, the '
+          'flashcard answer and the word page all use the free local voice.',
           style: GoogleFonts.inter(
             color: AppColors.mutedInk(context),
             fontSize: 12.5,
@@ -144,13 +152,12 @@ class _ElevenLabsSettingsState extends ConsumerState<ElevenLabsSettings> {
           ),
         ),
         const SizedBox(height: 12),
-        _SourcePicker(
-          source: source,
-          onChanged: (s) => ref.read(narrationSourceProvider.notifier).set(s),
+        _ModePicker(
+          mode: mode,
+          onChanged: (m) => ref.read(narrationModeProvider.notifier).set(m),
         ),
-        if (usingCloud) ...[
-          const SizedBox(height: 16),
-          TextField(
+        const SizedBox(height: 16),
+        TextField(
             controller: _key,
             obscureText: _obscure,
             autocorrect: false,
@@ -197,6 +204,18 @@ class _ElevenLabsSettingsState extends ConsumerState<ElevenLabsSettings> {
           ],
           const SizedBox(height: 12),
           _ModelPicker(onChanged: (m) => ElevenLabsService.instance.save(modelId: m)),
+          const SizedBox(height: 8),
+          _SpeedSlider(
+            value: _speed,
+            onChanged: (v) => setState(() => _speed = v),
+            onSettled: (v) => ElevenLabsService.instance.save(speed: v),
+          ),
+          const SizedBox(height: 4),
+          _StabilitySlider(
+            value: _stability,
+            onChanged: (v) => setState(() => _stability = v),
+            onSettled: (v) => ElevenLabsService.instance.save(stability: v),
+          ),
           const SizedBox(height: 14),
           Wrap(
             spacing: 10,
@@ -252,21 +271,22 @@ class _ElevenLabsSettingsState extends ConsumerState<ElevenLabsSettings> {
               ),
             ],
           ),
-        ],
       ],
     );
   }
 }
 
-class _SourcePicker extends StatelessWidget {
-  const _SourcePicker({required this.source, required this.onChanged});
-  final NarrationSource source;
-  final ValueChanged<NarrationSource> onChanged;
+/// Whole story vs one sentence at a time. Mirrors the toggle on each story
+/// card — same setting, reachable from either place.
+class _ModePicker extends StatelessWidget {
+  const _ModePicker({required this.mode, required this.onChanged});
+  final NarrationMode mode;
+  final ValueChanged<NarrationMode> onChanged;
 
   @override
   Widget build(BuildContext context) {
-    Widget tab(NarrationSource value, String label, String sub) {
-      final active = value == source;
+    Widget tab(NarrationMode value, String label, String sub) {
+      final active = value == mode;
       return Expanded(
         child: Material(
           color: Colors.transparent,
@@ -294,11 +314,11 @@ class _SourcePicker extends StatelessWidget {
                 children: [
                   Text(
                     label,
-                    style: GoogleFonts.inter(
+                    style: GoogleFonts.notoSerifKr(
                       color: active
                           ? AppColors.deepGold
                           : AppColors.mutedInk(context),
-                      fontSize: 12.5,
+                      fontSize: 13,
                       fontWeight: active ? FontWeight.w700 : FontWeight.w600,
                     ),
                   ),
@@ -328,8 +348,8 @@ class _SourcePicker extends StatelessWidget {
       padding: const EdgeInsets.all(4),
       child: Row(
         children: [
-          tab(NarrationSource.local, 'Local voice', 'free · offline'),
-          tab(NarrationSource.elevenLabs, 'ElevenLabs', 'better · costs credits'),
+          tab(NarrationMode.whole, '전체 재생', 'read straight through'),
+          tab(NarrationMode.sentence, '한 문장씩', 'stop after each sentence'),
         ],
       ),
     );
@@ -373,6 +393,138 @@ class _ModelPickerState extends State<_ModelPicker> {
         setState(() => _model = v);
         widget.onChanged(v);
       },
+    );
+  }
+}
+
+/// Pace for the narration voice. ElevenLabs treats this as a voice setting
+/// rather than a playback rate, so the model performs the line more slowly
+/// instead of the audio being stretched.
+class _SpeedSlider extends StatelessWidget {
+  const _SpeedSlider({
+    required this.value,
+    required this.onChanged,
+    required this.onSettled,
+  });
+
+  final double value;
+  final ValueChanged<double> onChanged;
+
+  /// Saved only when the drag ends — writing on every tick would spam prefs.
+  final ValueChanged<double> onSettled;
+
+  String get _label {
+    if (value < 0.8) return 'slow — easiest to follow';
+    if (value < 0.95) return 'relaxed';
+    if (value <= 1.05) return 'natural — native pace';
+    return 'brisk';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Text(
+              'Narration speed',
+              style: GoogleFonts.inter(
+                color: AppColors.ink(context),
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              '${value.toStringAsFixed(2)}×  ·  $_label',
+              style: GoogleFonts.inter(
+                color: AppColors.mutedInk(context),
+                fontSize: 11.5,
+              ),
+            ),
+          ],
+        ),
+        Slider(
+          value: value,
+          min: ElevenLabsService.minSpeed,
+          max: ElevenLabsService.maxSpeed,
+          divisions: 10,
+          onChanged: onChanged,
+          onChangeEnd: onSettled,
+        ),
+        Text(
+          'Changing this re-synthesizes each line, since cached clips are '
+          'stored per speed.',
+          style: GoogleFonts.inter(
+            color: AppColors.mutedInk(context),
+            fontSize: 11,
+            height: 1.4,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// How tightly the delivery is pinned between sentences.
+///
+/// The low end lets the model reinterpret every line, which is what makes a
+/// story wander in voice and tone; the high end keeps one performance across
+/// the whole thing at the cost of some expressiveness.
+class _StabilitySlider extends StatelessWidget {
+  const _StabilitySlider({
+    required this.value,
+    required this.onChanged,
+    required this.onSettled,
+  });
+
+  final double value;
+  final ValueChanged<double> onChanged;
+  final ValueChanged<double> onSettled;
+
+  String get _label {
+    if (value >= 0.85) return 'very steady — least variation';
+    if (value >= 0.6) return 'steady — one voice throughout';
+    if (value >= 0.35) return 'balanced';
+    return 'expressive — tone varies per line';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Text(
+              'Voice consistency',
+              style: GoogleFonts.inter(
+                color: AppColors.ink(context),
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                '${(value * 100).round()}%  ·  $_label',
+                overflow: TextOverflow.ellipsis,
+                style: GoogleFonts.inter(
+                  color: AppColors.mutedInk(context),
+                  fontSize: 11.5,
+                ),
+              ),
+            ),
+          ],
+        ),
+        Slider(
+          value: value,
+          divisions: 10,
+          onChanged: onChanged,
+          onChangeEnd: onSettled,
+        ),
+      ],
     );
   }
 }

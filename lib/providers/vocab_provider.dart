@@ -1,8 +1,13 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/vocab_word.dart';
+import '../services/daily_set_service.dart';
 import '../services/hangul.dart';
 import '../services/storage_service.dart';
+import 'word_set_provider.dart';
 
 class VocabNotifier extends StateNotifier<List<VocabWord>> {
   VocabNotifier() : super([]) {
@@ -203,10 +208,23 @@ String firstBlockOf(String hangul) {
 
 /// Which section of the vocab list to show. A word is either being learned
 /// or being reinforced — there is no third "learned" resting state.
-enum VocabSection { learning, reinforcement, all }
+enum VocabSection { learning, reinforcement }
 
+/// The app opens on Reinforced — the words actually in rotation are what you
+/// come back to day to day.
 final vocabSectionProvider =
-    StateProvider<VocabSection>((ref) => VocabSection.learning);
+    StateProvider<VocabSection>((ref) => VocabSection.reinforcement);
+
+/// When on, words put aside in a review set stay visible in the vocabulary
+/// list, dimmed and badged. Off by default: setting a batch aside is meant to
+/// clear it out of the way, and a list that still shows every archived word
+/// has not actually made room for anything.
+final showSetAsideProvider = StateProvider<bool>((ref) => false);
+
+/// When on, Learning and Reinforced words share one list instead of living
+/// behind separate tabs. Each type keeps its own colour so they stay tellable
+/// apart at a glance. Off at launch, so the app starts on Reinforced alone.
+final combinedViewProvider = StateProvider<bool>((ref) => false);
 
 /// 0-based group index used by the Learning tab to paginate by 25s. The
 /// selected group is also what the Stories tab draws its learning words from.
@@ -283,24 +301,150 @@ final storyWordsProvider = Provider<List<VocabWord>>((ref) {
   ];
 });
 
+/// Today's draw for the combined list, and how far the current cycle has come.
+@immutable
+class DailyPick {
+  const DailyPick({
+    this.ids = const {},
+    this.cycleShown = 0,
+    this.ready = false,
+  });
+
+  /// The ids of the words shown today.
+  final Set<String> ids;
+
+  /// How many words the current cycle has already spent.
+  final int cycleShown;
+
+  /// False until the stored set has been read off disk. The list shows
+  /// everything until then rather than flashing empty for a frame.
+  final bool ready;
+}
+
+/// Keeps [DailySetService] in step with the collection, and re-draws when the
+/// day rolls over while the app is left open.
+class DailyWordsNotifier extends StateNotifier<DailyPick> {
+  DailyWordsNotifier(this._ref) : super(const DailyPick()) {
+    _sync(_ref.read(vocabProvider));
+    // Adding or deleting words can invalidate the stored set, so follow it.
+    _ref.listen<List<VocabWord>>(vocabProvider, (_, next) => _sync(next));
+    // Archiving a batch shrinks the pool the same way a delete would.
+    _ref.listen<Set<String>>(
+        setAsideIdsProvider, (_, __) => _sync(_ref.read(vocabProvider)));
+    _armMidnight();
+  }
+
+  final Ref _ref;
+  Timer? _midnight;
+
+  /// Draws are serialized: two overlapping picks would each mark words as
+  /// shown and burn through the cycle twice as fast.
+  Future<void> _queue = Future<void>.value();
+
+  void _sync(List<VocabWord> words) {
+    _queue = _queue.then((_) async {
+      final ids = await DailySetService.instance.ensureToday(_pool(words));
+      _publish(ids);
+    }).catchError((_) {});
+  }
+
+  /// Words a draw may pick from. Set-aside words are excluded: they don't
+  /// appear in the list, so spending a day's slot on one would silently show
+  /// fewer than ten.
+  List<VocabWord> _pool(List<VocabWord> words) {
+    final aside = _ref.read(setAsideIdsProvider);
+    if (aside.isEmpty) return words;
+    return [
+      for (final w in words)
+        if (!aside.contains(w.id)) w,
+    ];
+  }
+
+  /// Draws a new set for today by hand.
+  Future<void> reshuffle() {
+    _queue = _queue.then((_) async {
+      final ids = await DailySetService.instance
+          .reshuffle(_pool(_ref.read(vocabProvider)));
+      _publish(ids);
+    }).catchError((_) {});
+    return _queue;
+  }
+
+  void _publish(List<String> ids) {
+    if (!mounted) return;
+    state = DailyPick(
+      ids: ids.toSet(),
+      cycleShown: DailySetService.instance.cycleShownCount,
+      ready: true,
+    );
+  }
+
+  /// Re-draws just after midnight, so an app left running overnight shows the
+  /// new day's words without needing a restart.
+  void _armMidnight() {
+    _midnight?.cancel();
+    final now = DateTime.now();
+    final next = DateTime(now.year, now.month, now.day + 1);
+    _midnight = Timer(
+      next.difference(now) + const Duration(seconds: 5),
+      () {
+        _sync(_ref.read(vocabProvider));
+        _armMidnight();
+      },
+    );
+  }
+
+  @override
+  void dispose() {
+    _midnight?.cancel();
+    super.dispose();
+  }
+}
+
+final dailyWordsProvider =
+    StateNotifierProvider<DailyWordsNotifier, DailyPick>(
+        (ref) => DailyWordsNotifier(ref));
+
 final filteredVocabProvider = Provider<List<VocabWord>>((ref) {
   final words = ref.watch(vocabProvider);
   final q = ref.watch(searchQueryProvider).toLowerCase().trim();
   final pos = ref.watch(posFilterProvider);
   final section = ref.watch(vocabSectionProvider);
+  final combined = ref.watch(combinedViewProvider);
   final block = ref.watch(blockFilterProvider);
+  final daily = ref.watch(dailyWordsProvider);
+  final setAside = ref.watch(setAsideIdsProvider);
+  final showSetAside = ref.watch(showSetAsideProvider);
+
+  // The combined view is a DAILY SET, not the whole collection: ten words,
+  // redrawn each morning. Searching or filtering suspends it — looking for a
+  // word and being told it doesn't exist because it isn't in today's ten
+  // would be a lie about your own vocabulary.
+  final dailyOnly = combined &&
+      daily.ready &&
+      daily.ids.isNotEmpty &&
+      q.isEmpty &&
+      pos == null &&
+      block == null;
+
   return words.where((w) {
-    switch (section) {
-      case VocabSection.learning:
-        // Anything not reinforced is "learning" — including words left with
-        // the retired `learned` status by an older build.
-        if (w.status == WordStatus.reinforcement) return false;
-        break;
-      case VocabSection.reinforcement:
-        if (w.status != WordStatus.reinforcement) return false;
-        break;
-      case VocabSection.all:
-        break;
+    // Put aside means out of sight as well as out of the review deck — the
+    // whole point is to clear room for new words. The 보관 중 strip above the
+    // list brings them back temporarily.
+    if (!showSetAside && setAside.contains(w.id)) return false;
+    if (dailyOnly && !daily.ids.contains(w.id)) return false;
+    // Combined view shows both types together; otherwise honour the tab.
+    if (!combined) {
+      switch (section) {
+        case VocabSection.learning:
+          // Anything not reinforced is "learning" — including words left with
+          // the retired `learned` status by an older build.
+          if (w.status == WordStatus.reinforcement) return false;
+          break;
+        case VocabSection.reinforcement:
+          if (w.status != WordStatus.reinforcement) return false;
+          break;
+      }
     }
     if (pos != null && w.partOfSpeech != pos) return false;
     if (block != null && !w.hangul.contains(block)) return false;
@@ -311,12 +455,16 @@ final filteredVocabProvider = Provider<List<VocabWord>>((ref) {
   }).toList();
 });
 
-/// Counts for the section pills (cheap O(n) walk).
+/// Counts for the section pills (cheap O(n) walk). Hidden set-aside words are
+/// not counted — a tab reading 40 while showing 6 is just wrong.
 final vocabCountsProvider =
     Provider<({int learning, int reinforcement, int total})>((ref) {
   final words = ref.watch(vocabProvider);
+  final setAside = ref.watch(setAsideIdsProvider);
+  final showSetAside = ref.watch(showSetAsideProvider);
   var learning = 0, reinforcement = 0;
   for (final w in words) {
+    if (!showSetAside && setAside.contains(w.id)) continue;
     if (w.status == WordStatus.reinforcement) {
       reinforcement++;
     } else {
@@ -326,6 +474,6 @@ final vocabCountsProvider =
   return (
     learning: learning,
     reinforcement: reinforcement,
-    total: words.length,
+    total: learning + reinforcement,
   );
 });

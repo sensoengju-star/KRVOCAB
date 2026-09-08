@@ -15,9 +15,14 @@ class VocabTile extends StatefulWidget {
     required this.onEdit,
     required this.onDelete,
     required this.onCycleStatus,
+    this.setAside = false,
   });
 
   final VocabWord word;
+
+  /// The word belongs to a review set that is currently put aside. Only ever
+  /// true while the list is showing archived words on purpose.
+  final bool setAside;
   final VoidCallback onTap;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
@@ -41,7 +46,7 @@ class _VocabTileState extends State<VocabTile> {
     // No per-tile drop shadow at rest (Gaussian blur × 30+ tiles = first-paint
     // jank on the Vocab tab). The shadow is added only on hover, where at
     // most one tile pays for it.
-    return MouseRegion(
+    final card = MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
       child: AnimatedScale(
@@ -50,14 +55,23 @@ class _VocabTileState extends State<VocabTile> {
         curve: Curves.easeOut,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 180),
-          margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 5),
+          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
           decoration: BoxDecoration(
-            color: AppColors.surface(context),
+            // The card itself carries the word's status colour — a learning
+            // word and a reinforced one are tellable apart at a glance even
+            // when they sit side by side in the combined list.
+            gradient: LinearGradient(
+              begin: Alignment.centerLeft,
+              end: Alignment.centerRight,
+              colors: [
+                AppColors.tintOf(context, accent),
+                AppColors.surface(context),
+              ],
+              stops: const [0, 0.55],
+            ),
             borderRadius: radius,
             border: Border.all(
-              color: _hovered
-                  ? AppColors.antiqueGold.withValues(alpha: 0.65)
-                  : AppColors.hairline(context),
+              color: accent.withValues(alpha: _hovered ? 0.75 : 0.35),
             ),
             boxShadow: _hovered ? AppColors.cardShadow(context) : null,
           ),
@@ -81,7 +95,7 @@ class _VocabTileState extends State<VocabTile> {
                       // without shouting.
                       AnimatedContainer(
                         duration: const Duration(milliseconds: 220),
-                        width: 4,
+                        width: 5,
                         color: accent,
                       ),
                       Expanded(child: _body(context, word)),
@@ -94,18 +108,24 @@ class _VocabTileState extends State<VocabTile> {
         ),
       ),
     );
+
+    // An archived word is shown faded — present, but plainly not part of what
+    // you're studying right now.
+    return widget.setAside ? Opacity(opacity: 0.55, child: card) : card;
   }
 
   Widget _body(BuildContext context, VocabWord word) {
     final status = word.status;
     final accent = _accentFor(status);
     final posColor = AppColors.forPartOfSpeech(word.partOfSpeech);
+    // Romanization follows the headword's hue, a shade lighter.
+    final subtle = accent.withValues(alpha: 0.85);
 
     // Rearranged: the three actions moved out of a tall right-hand column
     // into a single row along the card's bottom edge, so the word, its
     // reading and its meaning get the full card width.
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 14, 12, 8),
+      padding: const EdgeInsets.fromLTRB(20, 18, 14, 10),
       child: Row(
         children: [
           Expanded(
@@ -122,11 +142,20 @@ class _VocabTileState extends State<VocabTile> {
                       child: DictionaryForm(
                         word: word.hangul,
                         partOfSpeech: word.partOfSpeech,
+                        // The headword itself is neutral for BOTH types —
+                        // white on the dark theme. The type is still obvious
+                        // from the spine, the card wash, the chips and the
+                        // romanization, so colouring the word too was noise.
+                        //
+                        // Light theme takes ink instead: the card there is
+                        // white, and white-on-white would erase the word.
                         style: GoogleFonts.notoSerifKr(
-                          color: AppColors.ink(context),
-                          fontSize: 25,
+                          color: Theme.of(context).brightness == Brightness.dark
+                              ? Colors.white
+                              : AppColors.charcoal,
+                          fontSize: 32,
                           fontWeight: FontWeight.w600,
-                          height: 1.25,
+                          height: 1.22,
                         ),
                       ),
                     ),
@@ -137,31 +166,23 @@ class _VocabTileState extends State<VocabTile> {
                           word.romanization,
                           overflow: TextOverflow.ellipsis,
                           style: GoogleFonts.inter(
-                            color: AppColors.antiqueGold,
+                            color: subtle,
                             fontStyle: FontStyle.italic,
-                            fontSize: 13,
+                            fontSize: 15,
                           ),
                         ),
                       ),
                     ],
                   ],
                 ),
-                // Generous margins above and below: at 23 px the polite form
-                // is a second headword, and it crowds the reading above it
-                // and the gloss below without room to breathe.
-                if (word.politeForm.trim().isNotEmpty) ...[
-                  const SizedBox(height: 13),
-                  _PoliteChip(form: word.politeForm),
-                  const SizedBox(height: 5),
-                ],
                 if (word.englishMeaning.trim().isNotEmpty) ...[
                   const SizedBox(height: 8),
                   Text(
                     word.englishMeaning,
                     style: GoogleFonts.inter(
                       color: AppColors.mutedInk(context),
-                      fontSize: 13.5,
-                      height: 1.4,
+                      fontSize: 15.5,
+                      height: 1.45,
                     ),
                   ),
                 ],
@@ -176,11 +197,16 @@ class _VocabTileState extends State<VocabTile> {
                     ),
                     const SizedBox(width: 6),
                     _MetaPill(label: _statusLabel(status), color: accent),
+                    if (widget.setAside) ...[
+                      const SizedBox(width: 6),
+                      _MetaPill(
+                          label: '보관됨', color: AppColors.mutedInk(context)),
+                    ],
                     const Spacer(),
                     TonalIconButton(
                       icon: Icons.volume_up_outlined,
                       tooltip: '발음 듣기',
-                      color: AppColors.antiqueGold,
+                      color: accent,
                       onPressed: () => TtsService.instance.speakWord(word),
                     ),
                     TonalIconButton(
@@ -214,8 +240,8 @@ class _VocabTileState extends State<VocabTile> {
                           'Click to see meaning & examples',
                           overflow: TextOverflow.ellipsis,
                           style: GoogleFonts.inter(
-                            color: AppColors.deepGold,
-                            fontSize: 11,
+                            color: AppColors.onSurfaceAccent(context, accent),
+                            fontSize: 12,
                             fontWeight: FontWeight.w600,
                             letterSpacing: 0.1,
                           ),
@@ -225,8 +251,8 @@ class _VocabTileState extends State<VocabTile> {
                         offset: _hovered ? const Offset(0.22, 0) : Offset.zero,
                         duration: const Duration(milliseconds: 180),
                         curve: Curves.easeOut,
-                        child: const Icon(Icons.chevron_right,
-                            size: 15, color: AppColors.antiqueGold),
+                        child: Icon(Icons.chevron_right,
+                            size: 17, color: accent),
                       ),
                     ],
                   ),
@@ -258,53 +284,6 @@ class _VocabTileState extends State<VocabTile> {
       : 'Learning — tap to mark Reinforced';
 }
 
-/// 해요체 form shown as a tinted chip instead of a loose label + text pair.
-class _PoliteChip extends StatelessWidget {
-  const _PoliteChip({required this.form});
-  final String form;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(12, 6, 15, 8),
-      decoration: BoxDecoration(
-        color: AppColors.goldTint(context),
-        borderRadius: BorderRadius.circular(AppRadius.xs),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.baseline,
-        textBaseline: TextBaseline.alphabetic,
-        children: [
-          Text(
-            '해요체',
-            style: GoogleFonts.inter(
-              color: AppColors.mutedInk(context),
-              fontSize: 9.5,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 0.8,
-            ),
-          ),
-          const SizedBox(width: 9),
-          // Sized to sit level with the dictionary form above it — the polite
-          // form is what you actually say, so it shouldn't read as a footnote.
-          Text(
-            form,
-            style: GoogleFonts.notoSerifKr(
-              color: AppColors.deepGold,
-              fontSize: 23,
-              height: 1.2,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Small tinted label. [color] carries the meaning — part of speech gets its
-/// own hue from the 오방색 set, status gets the status colour.
 class _MetaPill extends StatelessWidget {
   const _MetaPill({required this.label, required this.color});
   final String label;
@@ -313,7 +292,7 @@ class _MetaPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
         color: AppColors.tintOf(context, color),
         borderRadius: BorderRadius.circular(AppRadius.xs),
@@ -322,8 +301,8 @@ class _MetaPill extends StatelessWidget {
         label,
         style: GoogleFonts.inter(
           color: AppColors.onSurfaceAccent(context, color),
-          fontSize: 9.5,
-          letterSpacing: 0.6,
+          fontSize: 11,
+          letterSpacing: 0.5,
           fontWeight: FontWeight.w700,
         ),
       ),

@@ -133,38 +133,16 @@ class _ExampleCardState extends State<ExampleCard> {
   }
 
   Widget _buildKoreanWithUnderline(BuildContext context) {
-    final korean = widget.sentence.korean;
-    final t = widget.target;
-    final base = GoogleFonts.notoSerifKr(
-      color: AppColors.ink(context),
-      fontSize: 20,
-      height: 1.4,
-      fontWeight: FontWeight.w500,
+    // No highlighting outside stories.
+    return Text(
+      widget.sentence.korean,
+      style: GoogleFonts.notoSerifKr(
+        color: AppColors.ink(context),
+        fontSize: 20,
+        height: 1.4,
+        fontWeight: FontWeight.w500,
+      ),
     );
-    if (t.isEmpty || !korean.contains(t)) {
-      return Text(korean, style: base);
-    }
-    final spans = <TextSpan>[];
-    var rest = korean;
-    while (rest.isNotEmpty) {
-      final idx = rest.indexOf(t);
-      if (idx == -1) {
-        spans.add(TextSpan(text: rest));
-        break;
-      }
-      if (idx > 0) spans.add(TextSpan(text: rest.substring(0, idx)));
-      spans.add(TextSpan(
-        text: t,
-        style: TextStyle(
-          decoration: TextDecoration.underline,
-          decorationColor: AppColors.antiqueGold,
-          decorationThickness: 2.2,
-          color: AppColors.deepGold,
-        ),
-      ));
-      rest = rest.substring(idx + t.length);
-    }
-    return RichText(text: TextSpan(style: base, children: spans));
   }
 }
 

@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
@@ -7,16 +5,16 @@ import '../models/vocab_word.dart';
 import '../theme/app_colors.dart';
 import 'dictionary_form.dart';
 
-/// 3D Y-axis flip flashcard. English on the front, Hangul + romanization
-/// on the back.
+/// Flashcard with a simple cross-dissolve reveal. English on the front,
+/// Hangul + romanization on the back.
 class Flashcard extends StatefulWidget {
   const Flashcard({super.key, required this.word, required this.revealed});
 
-  /// How long the flip takes. Public so callers can sequence work around it —
-  /// the Review screen waits this out before speaking, since a platform
+  /// How long the reveal takes. Public so callers can sequence work around
+  /// it — the Review screen waits this out before speaking, since a platform
   /// channel call lands on the UI thread on desktop and would stutter the
   /// animation.
-  static const Duration flipDuration = Duration(milliseconds: 320);
+  static const Duration revealDuration = Duration(milliseconds: 320);
 
   final VocabWord word;
   final bool revealed;
@@ -25,16 +23,29 @@ class Flashcard extends StatefulWidget {
   State<Flashcard> createState() => _FlashcardState();
 }
 
+// TickerProvider (not SingleTicker): this state drives two controllers —
+// the reveal and the new-card entrance.
 class _FlashcardState extends State<Flashcard>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   // 320 ms: quick enough to feel instant when you're drilling a deck, still
-  // long enough to read as a flip rather than a swap.
+  // long enough to register as a change rather than a jump cut.
   late final AnimationController _c = AnimationController(
     vsync: this,
-    duration: Flashcard.flipDuration,
+    duration: Flashcard.revealDuration,
   );
   late final Animation<double> _anim =
       CurvedAnimation(parent: _c, curve: Curves.easeOutCubic);
+
+  /// Separate from the reveal: advancing to a new word used to swap the card's
+  /// contents instantly, which read as a jump cut between questions. The new
+  /// card now arrives with its own short entrance.
+  late final AnimationController _enter = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 300),
+    value: 1,
+  );
+  late final Animation<double> _enterAnim =
+      CurvedAnimation(parent: _enter, curve: Curves.easeOutCubic);
 
   @override
   void didUpdateWidget(covariant Flashcard old) {
@@ -47,13 +58,16 @@ class _FlashcardState extends State<Flashcard>
       }
     }
     if (widget.word.id != old.word.id) {
+      // Show the new word's question side, then play it in.
       _c.value = 0;
+      _enter.forward(from: 0);
     }
   }
 
   @override
   void dispose() {
     _c.dispose();
+    _enter.dispose();
     super.dispose();
   }
 
@@ -61,29 +75,40 @@ class _FlashcardState extends State<Flashcard>
   Widget build(BuildContext context) {
     // Build both faces ONCE per widget-build and reuse the same instances
     // across every animation frame. The AnimatedBuilder closure only wraps
-    // them in a fresh Transform each tick, so the face subtrees (and their
-    // GoogleFonts text styles) aren't rebuilt 60× during the flip.
+    // them in a fresh Opacity/Transform each tick, so the face subtrees (and
+    // their GoogleFonts text styles) aren't rebuilt 60x during the reveal.
     final front = _CardFace(child: _FrontFace(word: widget.word));
     final back = _CardFace(child: _BackFace(word: widget.word));
+
     return RepaintBoundary(
       child: AnimatedBuilder(
-        animation: _anim,
+        // Both animations drive the same subtree, so listen to the pair.
+        animation: Listenable.merge([_anim, _enter]),
         builder: (_, __) {
           final v = _anim.value;
-          final angle = v * math.pi;
           final isBack = v > 0.5;
-          return Transform(
-            alignment: Alignment.center,
-            transform: Matrix4.identity()
-              ..setEntry(3, 2, 0.0015)
-              ..rotateY(angle),
-            child: isBack
-                ? Transform(
-                    alignment: Alignment.center,
-                    transform: Matrix4.identity()..rotateY(math.pi),
-                    child: back,
-                  )
-                : front,
+
+          // Two phases so the faces never overlap: the outgoing one fades to
+          // nothing by the midpoint, then the incoming one fades up. Blending
+          // two different words on top of each other just looks muddy.
+          final t = isBack ? (v - 0.5) * 2 : 1 - (v * 2);
+          final opacity = t.clamp(0.0, 1.0);
+
+          // A touch of scale so it settles rather than simply appearing.
+          final scale = 0.97 + (0.03 * opacity);
+
+          // The entrance slides the card up a few pixels as it fades in, so a
+          // new question feels handed to you rather than teleported in.
+          final enter = _enterAnim.value;
+          return Opacity(
+            opacity: opacity * enter,
+            child: Transform.translate(
+              offset: Offset(0, 14 * (1 - enter)),
+              child: Transform.scale(
+                scale: scale,
+                child: isBack ? back : front,
+              ),
+            ),
           );
         },
       ),

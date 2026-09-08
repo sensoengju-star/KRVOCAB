@@ -10,11 +10,14 @@ import '../providers/review_provider.dart';
 import '../providers/review_settings_provider.dart';
 import '../providers/tts_settings_provider.dart';
 import '../providers/vocab_provider.dart';
+import '../providers/word_set_provider.dart';
 import '../services/llm_service.dart';
 import '../services/tts_service.dart';
+import '../services/word_set_store.dart';
 import '../theme/app_colors.dart';
 import '../widgets/flashcard.dart';
 import '../widgets/gold_button.dart';
+import '../widgets/word_sets_sheet.dart';
 
 class ReviewScreen extends ConsumerStatefulWidget {
   const ReviewScreen({super.key});
@@ -36,7 +39,7 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
   final ValueNotifier<bool?> _match = ValueNotifier<bool?>(null);
   Timer? _autoAdvance;
 
-  /// Pending auto-pronunciation, held until the flip animation finishes.
+  /// Pending auto-pronunciation, held until the reveal animation finishes.
   Timer? _speakTimer;
 
   /// True during the post-correct reinforcement window. While locked we
@@ -157,23 +160,23 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
     ref.read(reviewProvider.notifier).reveal();
   }
 
-  /// Speaks [word] once the card has finished turning.
+  /// Speaks [word] once the card has finished revealing.
   ///
   /// Platform channel calls run on the platform thread, which on Windows and
   /// macOS is also the UI thread — and the first utterance pays for the
   /// speech engine spinning up its voice and audio pipeline. Firing that
-  /// during the flip drops frames right where they're most visible, so the
-  /// utterance waits for the animation to land instead.
-  void _speakAfterFlip(VocabWord word) {
+  /// mid-animation drops frames right where they're most visible, so the
+  /// utterance waits for the reveal to land instead.
+  void _speakAfterReveal(VocabWord word) {
     _speakTimer?.cancel();
     _speakTimer = Timer(
-      Flashcard.flipDuration + const Duration(milliseconds: 40),
+      Flashcard.revealDuration + const Duration(milliseconds: 40),
       () {
         if (!mounted) return;
-        // The user may have moved on while the card was turning.
+        // The user may have moved on while the card was revealing.
         final current = ref.read(reviewProvider).current;
         if (current?.id != word.id) return;
-        TtsService.instance.speakWord(word);
+        TtsService.instance.speakDictionaryForm(word);
       },
     );
   }
@@ -186,6 +189,80 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
       _loadingExample = false;
       _example = result;
     });
+  }
+
+  /// Files the whole finished deck away as one named set.
+  ///
+  /// The words themselves are not touched: they keep their status, their
+  /// counts and their place in the vocabulary list. All this does is take
+  /// them out of the review deck, so whatever is added next has the deck to
+  /// itself.
+  Future<void> _archiveDeck() async {
+    final deck = ref.read(reviewProvider).deck;
+    if (deck.isEmpty) return;
+    final controller =
+        TextEditingController(text: WordSetStore.instance.suggestName());
+
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('${deck.length}개 단어를 묶어서 보관',
+            style: GoogleFonts.notoSerifKr(fontSize: 17)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '이 단어들은 복습 카드에서 잠시 빠지고, 새 단어를 위한 자리가 생겨요. '
+              '단어는 그대로 남아 있고, 언제든 보관함에서 다시 켜서 복습할 수 있어요.',
+              style: GoogleFonts.notoSerifKr(fontSize: 13, height: 1.55),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: controller,
+              autofocus: true,
+              style: GoogleFonts.notoSerifKr(fontSize: 15),
+              decoration: const InputDecoration(labelText: '세트 이름'),
+              onSubmitted: (v) => Navigator.pop(ctx, v),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('취소')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, controller.text),
+            child: const Text('보관하기'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (name == null) return;
+
+    final ids = [for (final w in deck) w.id];
+    final set = await ref.read(wordSetsProvider.notifier).create(name, ids);
+    if (!mounted) return;
+    // The deck rebuilds itself — setAsideIdsProvider changed, and the review
+    // notifier listens to it.
+    _resetCardUi();
+
+    // NO SnackBarAction here, deliberately. ScaffoldMessenger refuses to start
+    // its auto-dismiss timer for a snack bar that HAS an action while
+    // accessible navigation is on — the bar then sits over the nav bar until
+    // something else replaces it. The shelf is one tap away from the 📦 icon
+    // and from the empty-deck button, so the action button bought nothing.
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.clearSnackBars();
+    final bar = messenger.showSnackBar(
+      SnackBar(
+        content: Text('"${set.name}" 보관 완료 — ${ids.length}개 단어'),
+        duration: const Duration(seconds: 3),
+        showCloseIcon: true,
+      ),
+    );
+    // Belt and braces: close it ourselves whatever the framework decides.
+    Timer(const Duration(seconds: 3), bar.close);
   }
 
   void _seeExamples(VocabWord word) {
@@ -217,7 +294,7 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
       _resetCardUi();
     });
 
-    // Speak the card the moment it turns to its answer side — whether the
+    // Speak the card the moment it shows its answer side — whether the
     // user typed it correctly or gave up and tapped Reveal. Watching the
     // state transition (rather than hooking each of those paths) means a new
     // reveal route can't forget to make a sound.
@@ -228,7 +305,7 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
       final wasRevealedForSameCard =
           prev != null && prev.revealed && prev.current?.id == w.id;
       if (wasRevealedForSameCard) return;
-      _speakAfterFlip(w);
+      _speakAfterReveal(w);
     });
 
     final state = ref.watch(reviewProvider);
@@ -238,22 +315,55 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
       // Distinguish "no words at all" from "everything is reinforced and
       // reinforced words are currently excluded".
       final hasAnyWords = ref.watch(vocabProvider).isNotEmpty;
-      final message = hasAnyWords
-          ? 'Every word is marked reinforced 🎉\nTurn on "Include reinforced '
-              'words" in Settings to keep reviewing them.'
-          : 'Add a few words first — your review deck is empty.';
+      final sets = ref.watch(wordSetsProvider);
+      final putAside = sets.where((x) => !x.active).length;
+      // Right after archiving, an empty deck has an obvious cause. Say that
+      // one instead of blaming the Settings toggles.
+      final message = putAside > 0
+          ? '복습할 새 단어가 없어요.\n단어를 더 추가하거나, 보관한 세트를 다시 켜 보세요.'
+          : hasAnyWords
+              ? 'Every word is marked reinforced 🎉\nTurn on "Include reinforced '
+                  'words" in Settings to keep reviewing them.'
+              : 'Add a few words first — your review deck is empty.';
       return SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(32),
           child: Center(
-            child: Text(
-              message,
-              textAlign: TextAlign.center,
-              style: GoogleFonts.inter(
-                color: AppColors.mutedInk(context),
-                fontSize: 14,
-                height: 1.5,
-              ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  message,
+                  textAlign: TextAlign.center,
+                  style: putAside > 0
+                      ? GoogleFonts.notoSerifKr(
+                          color: AppColors.mutedInk(context),
+                          fontSize: 14,
+                          height: 1.6,
+                        )
+                      : GoogleFonts.inter(
+                          color: AppColors.mutedInk(context),
+                          fontSize: 14,
+                          height: 1.5,
+                        ),
+                ),
+                if (sets.isNotEmpty) ...[
+                  const SizedBox(height: 22),
+                  TextButton.icon(
+                    onPressed: () => WordSetsSheet.show(context),
+                    icon: const Icon(Icons.inventory_2_outlined, size: 17),
+                    label: Text(
+                      '보관함 열기 (${sets.length})',
+                      style: GoogleFonts.notoSerifKr(
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    style: TextButton.styleFrom(
+                        foregroundColor: AppColors.antiqueGold),
+                  ),
+                ],
+              ],
             ),
           ),
         ),
@@ -275,6 +385,17 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
                 valueColor: const AlwaysStoppedAnimation(AppColors.antiqueGold),
               ),
             ),
+
+            // 2. One lap done — offer to file the deck away. It shows up only
+            // once every card has been answered, so the button can never be
+            // used to skip a review that hasn't happened.
+            if (state.lapComplete) ...[
+              const SizedBox(height: 10),
+              _LapCompleteBanner(
+                count: state.deck.length,
+                onArchive: _archiveDeck,
+              ),
+            ],
 
             const SizedBox(height: 12),
 
@@ -316,6 +437,22 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
                             Icons.auto_awesome_outlined,
                             size: 16,
                             color: AppColors.deepGold,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Tooltip(
+                      message: '보관한 세트',
+                      child: InkWell(
+                        onTap: () => WordSetsSheet.show(context),
+                        borderRadius: BorderRadius.circular(20),
+                        child: Padding(
+                          padding: const EdgeInsets.all(4),
+                          child: Icon(
+                            Icons.inventory_2_outlined,
+                            size: 16,
+                            color: AppColors.mutedInk(context),
                           ),
                         ),
                       ),
@@ -470,6 +607,76 @@ class _CircleBackButton extends StatelessWidget {
 
 /// Compact inline reinforcement: one Korean sentence shown after a correct
 /// answer. The English translation is hidden until the user taps to reveal it.
+/// Shown once every card in the deck has been answered.
+///
+/// It is the only route to setting a batch aside, which is deliberate: the
+/// offer to file words away only makes sense as the reward for finishing.
+class _LapCompleteBanner extends StatelessWidget {
+  const _LapCompleteBanner({required this.count, required this.onArchive});
+
+  final int count;
+  final VoidCallback onArchive;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 11, 10, 11),
+      decoration: BoxDecoration(
+        color: AppColors.goldTint(context),
+        borderRadius: BorderRadius.circular(AppRadius.sm),
+        border:
+            Border.all(color: AppColors.antiqueGold.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.check_circle_outline,
+              color: AppColors.antiqueGold, size: 19),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '한 바퀴 끝! $count개 단어를 모두 확인했어요',
+                  style: GoogleFonts.notoSerifKr(
+                    color: AppColors.ink(context),
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '묶어서 보관하면 새 단어만 남아요',
+                  style: GoogleFonts.notoSerifKr(
+                    color: AppColors.mutedInk(context),
+                    fontSize: 11.5,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          FilledButton.icon(
+            onPressed: onArchive,
+            icon: const Icon(Icons.inventory_2_outlined, size: 16),
+            label: Text(
+              '묶어서 보관',
+              style: GoogleFonts.notoSerifKr(
+                  fontSize: 12.5, fontWeight: FontWeight.w700),
+            ),
+            style: FilledButton.styleFrom(
+              backgroundColor: AppColors.antiqueGold,
+              foregroundColor: AppColors.onyx,
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              visualDensity: VisualDensity.compact,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _ExamplePreview extends StatefulWidget {
   const _ExamplePreview({
     required this.loading,
@@ -602,71 +809,23 @@ class _ExamplePreviewState extends State<_ExamplePreview> {
     );
   }
 
-  /// Underline any occurrence of the candidate [forms] in [korean]. We pass
-  /// both the conjugated surface form the model reported and the dictionary
-  /// form, so nouns (verbatim) and conjugated verbs/adjectives both highlight.
+  /// The example sentence, plain. Highlighting the target word here was
+  /// dropped along with everywhere else outside stories — [forms] is kept in
+  /// the signature so the call site still documents what the sentence is
+  /// built around.
   Widget _highlightTarget(
-      BuildContext context, String korean, List<String> forms) {
-    final base = GoogleFonts.notoSerifKr(
-      color: AppColors.ink(context),
-      fontSize: 16,
-      height: 1.4,
-      fontWeight: FontWeight.w500,
+    BuildContext context,
+    String korean,
+    List<String> forms,
+  ) {
+    return Text(
+      korean,
+      style: GoogleFonts.notoSerifKr(
+        color: AppColors.ink(context),
+        fontSize: 17,
+        height: 1.5,
+        fontWeight: FontWeight.w500,
+      ),
     );
-
-    final targets = forms.where((f) => f.trim().isNotEmpty).toList();
-    if (targets.isEmpty || korean.isEmpty) return Text(korean, style: base);
-    // Longest first so we don't underline a substring of a longer match.
-    targets.sort((a, b) => b.length.compareTo(a.length));
-
-    final matched = List<bool>.filled(korean.length, false);
-    for (final t in targets) {
-      var from = 0;
-      while (true) {
-        final idx = korean.indexOf(t, from);
-        if (idx == -1) break;
-        var clash = false;
-        for (var k = idx; k < idx + t.length; k++) {
-          if (matched[k]) {
-            clash = true;
-            break;
-          }
-        }
-        if (!clash) {
-          for (var k = idx; k < idx + t.length; k++) {
-            matched[k] = true;
-          }
-        }
-        from = idx + t.length;
-      }
-    }
-    if (!matched.contains(true)) return Text(korean, style: base);
-
-    final spans = <TextSpan>[];
-    final buf = StringBuffer();
-    bool? bufHi;
-    void flush() {
-      if (buf.isEmpty) return;
-      spans.add(TextSpan(
-        text: buf.toString(),
-        style: bufHi == true
-            ? const TextStyle(
-                decoration: TextDecoration.underline,
-                decorationColor: AppColors.antiqueGold,
-                decorationThickness: 2,
-                color: AppColors.deepGold,
-              )
-            : null,
-      ));
-      buf.clear();
-    }
-
-    for (var i = 0; i < korean.length; i++) {
-      if (bufHi != null && matched[i] != bufHi) flush();
-      bufHi = matched[i];
-      buf.write(korean[i]);
-    }
-    flush();
-    return RichText(text: TextSpan(style: base, children: spans));
   }
 }

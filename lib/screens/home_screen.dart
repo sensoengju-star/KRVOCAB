@@ -120,9 +120,7 @@ class HomeScreen extends ConsumerWidget {
               child: _CircleAction(
                 icon: Icons.settings_outlined,
                 tooltip: 'Settings',
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const _SettingsRoute()),
-                ),
+                onTap: () => _confirmOpenSettings(context),
               ),
             ),
           ],
@@ -318,6 +316,43 @@ class _NavItem extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Asks before opening Settings.
+///
+/// The gear sits in the app bar on every tab, one stray tap away at all
+/// times — and behind it are the API key and the bulk deletes. A confirm
+/// makes getting there deliberate.
+Future<void> _confirmOpenSettings(BuildContext context) async {
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text(
+        '설정을 열까요?',
+        style: GoogleFonts.notoSerifKr(fontSize: 18, fontWeight: FontWeight.w600),
+      ),
+      content: Text(
+        'Settings holds your ElevenLabs key, the model server paths, and the '
+        'bulk-delete actions.',
+        style: GoogleFonts.inter(fontSize: 13, height: 1.5),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, false),
+          child: const Text('취소'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, true),
+          child: const Text('열기'),
+        ),
+      ],
+    ),
+  );
+
+  if (ok != true || !context.mounted) return;
+  await Navigator.of(context).push(
+    MaterialPageRoute(builder: (_) => const _SettingsRoute()),
+  );
 }
 
 /// Small circular tonal button used for app-bar actions.

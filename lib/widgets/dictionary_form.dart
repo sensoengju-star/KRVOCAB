@@ -38,6 +38,14 @@ class DictionaryForm extends StatelessWidget {
   final int? maxLines;
   final TextOverflow? overflow;
 
+  /// The colour the citation ending is drawn in: the part of speech's own
+  /// accent, lightened to stay legible. Public so the 해요체 form can be
+  /// drawn in the SAME colour — both are the inflection of the word, and
+  /// giving them one hue makes them read as a pair.
+  static Color endingColorFor(BuildContext context, String partOfSpeech) =>
+      AppColors.onSurfaceAccent(
+          context, AppColors.forPartOfSpeech(partOfSpeech));
+
   /// True when [word] is a verb/descriptive verb in its -다 citation form.
   static bool hasCitationEnding(String word, String partOfSpeech) {
     final w = word.trim();
@@ -59,9 +67,7 @@ class DictionaryForm extends StatelessWidget {
       );
     }
 
-    final accent = endingColor ??
-        AppColors.onSurfaceAccent(
-            context, AppColors.forPartOfSpeech(partOfSpeech));
+    final accent = endingColor ?? endingColorFor(context, partOfSpeech);
 
     return Text.rich(
       TextSpan(

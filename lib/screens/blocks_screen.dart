@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -13,8 +11,8 @@ import '../services/hangul.dart';
 import '../theme/app_colors.dart';
 import '../widgets/gold_button.dart';
 
-/// "Blocks" tab — a flip-only drill for recognizing Hangul syllable blocks as
-/// single units. Front shows the block (작), tap Reveal to flip to its sound
+/// "Blocks" tab — a reveal-only drill for recognizing Hangul syllable blocks
+/// as single units. Front shows the block (작), tap Reveal to show its sound
 /// (jak). Blocks are added manually; the romanization auto-fills.
 class BlocksScreen extends ConsumerStatefulWidget {
   const BlocksScreen({super.key});
@@ -312,7 +310,8 @@ class _AddFab extends StatelessWidget {
   }
 }
 
-/// 3D Y-axis flip card. Front = syllable block, back = romanization.
+/// Reveal card with a simple cross-dissolve. Front = syllable block,
+/// back = romanization.
 class _BlockFlashcard extends StatefulWidget {
   const _BlockFlashcard({required this.block, required this.revealed});
   final BlockEntry block;
@@ -324,7 +323,7 @@ class _BlockFlashcard extends StatefulWidget {
 
 class _BlockFlashcardState extends State<_BlockFlashcard>
     with SingleTickerProviderStateMixin {
-  // Matches the vocabulary flashcard's 320 ms flip.
+  // Matches the vocabulary flashcard's 320 ms reveal.
   late final AnimationController _c = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 320),
@@ -398,20 +397,15 @@ class _BlockFlashcardState extends State<_BlockFlashcard>
         animation: _anim,
         builder: (_, __) {
           final v = _anim.value;
-          final angle = v * math.pi;
           final isBack = v > 0.5;
-          return Transform(
-            alignment: Alignment.center,
-            transform: Matrix4.identity()
-              ..setEntry(3, 2, 0.0015)
-              ..rotateY(angle),
-            child: isBack
-                ? Transform(
-                    alignment: Alignment.center,
-                    transform: Matrix4.identity()..rotateY(math.pi),
-                    child: back,
-                  )
-                : front,
+          // Two phases, so the two faces never blend into each other.
+          final opacity = (isBack ? (v - 0.5) * 2 : 1 - (v * 2)).clamp(0.0, 1.0);
+          return Opacity(
+            opacity: opacity,
+            child: Transform.scale(
+              scale: 0.97 + (0.03 * opacity),
+              child: isBack ? back : front,
+            ),
           );
         },
       ),
@@ -863,34 +857,14 @@ class _WordsWithBlockSheet extends ConsumerWidget {
   }
 
   Widget _highlightBlock(BuildContext context, String hangul, String block) {
-    final base = GoogleFonts.notoSerifKr(
-      color: AppColors.ink(context),
-      fontSize: 22,
-      fontWeight: FontWeight.w600,
+    // No highlighting outside stories.
+    return Text(
+      hangul,
+      style: GoogleFonts.notoSerifKr(
+        color: AppColors.ink(context),
+        fontSize: 22,
+        fontWeight: FontWeight.w600,
+      ),
     );
-    if (block.isEmpty || !hangul.contains(block)) {
-      return Text(hangul, style: base);
-    }
-    final spans = <TextSpan>[];
-    var rest = hangul;
-    while (rest.isNotEmpty) {
-      final idx = rest.indexOf(block);
-      if (idx == -1) {
-        spans.add(TextSpan(text: rest));
-        break;
-      }
-      if (idx > 0) spans.add(TextSpan(text: rest.substring(0, idx)));
-      spans.add(TextSpan(
-        text: block,
-        style: const TextStyle(
-          color: AppColors.deepGold,
-          decoration: TextDecoration.underline,
-          decorationColor: AppColors.antiqueGold,
-          decorationThickness: 2,
-        ),
-      ));
-      rest = rest.substring(idx + block.length);
-    }
-    return RichText(text: TextSpan(style: base, children: spans));
   }
 }

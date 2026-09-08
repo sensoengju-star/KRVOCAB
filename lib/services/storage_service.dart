@@ -19,10 +19,14 @@ class StorageService {
   static const String _blocksBoxName = 'blocks_v1';
   static const String _grammarBoxName = 'grammar_v1';
   static const String _detailsBoxName = 'word_details_v1';
+  static const String _storiesBoxName = 'stories_v1';
+  static const String _setsBoxName = 'word_sets_v1';
   Box<VocabWord>? _box;
   Box<BlockEntry>? _blocksBox;
   Box<GrammarTopic>? _grammarBox;
   Box<String>? _detailsBox;
+  Box<String>? _storiesBox;
+  Box<String>? _setsBox;
 
   /// Directory the boxes live in — needed to quarantine a damaged file.
   String? _dir;
@@ -53,6 +57,26 @@ class StorageService {
 
   Box<GrammarTopic> get grammarBox {
     final b = _grammarBox;
+    if (b == null) {
+      throw StateError('StorageService not initialized — call init() first.');
+    }
+    return b;
+  }
+
+  /// Generated stories (JSON), keyed by story id. Plain strings — no adapter.
+  Box<String> get storiesBox {
+    final b = _storiesBox;
+    if (b == null) {
+      throw StateError('StorageService not initialized — call init() first.');
+    }
+    return b;
+  }
+
+  /// Finished review sets (JSON), keyed by set id. Plain strings — no
+  /// adapter: a set is three fields and a list of ids, and a JSON box needs no
+  /// schema migration when that changes.
+  Box<String> get setsBox {
+    final b = _setsBox;
     if (b == null) {
       throw StateError('StorageService not initialized — call init() first.');
     }
@@ -100,6 +124,8 @@ class StorageService {
     _blocksBox = await _openRecovering<BlockEntry>(_blocksBoxName);
     _grammarBox = await _openRecovering<GrammarTopic>(_grammarBoxName);
     _detailsBox = await _openRecovering<String>(_detailsBoxName);
+    _storiesBox = await _openRecovering<String>(_storiesBoxName);
+    _setsBox = await _openRecovering<String>(_setsBoxName);
 
     // From here on, every write is flushed to disk shortly after it lands.
     _armAutoFlush();
@@ -242,6 +268,8 @@ class StorageService {
       _blocksBox,
       _grammarBox,
       _detailsBox,
+      _storiesBox,
+      _setsBox,
     ]) {
       if (b == null || !b.isOpen) continue;
       try {
@@ -262,6 +290,8 @@ class StorageService {
       _blocksBox,
       _grammarBox,
       _detailsBox,
+      _storiesBox,
+      _setsBox,
     ]) {
       if (b == null) continue;
       _watchers.add(b.watch().listen((_) => _scheduleFlush()));
@@ -377,6 +407,8 @@ class StorageService {
       await _blocksBox?.close();
       await _grammarBox?.close();
       await _detailsBox?.close();
+      await _storiesBox?.close();
+      await _setsBox?.close();
     } on FileSystemException {
       // ignore — already closed or OneDrive locked
     }

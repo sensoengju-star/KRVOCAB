@@ -4,7 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../services/narration_service.dart';
 import '../services/tts_service.dart';
 
-/// Whether a card speaks itself when it flips to the answer side.
+/// Whether a card speaks itself when it turns to the answer side.
 /// Persisted in SharedPreferences. Default: on — hearing the word is the
 /// point of the feature; tap-to-hear stays available either way.
 class AutoSpeakNotifier extends StateNotifier<bool> {
@@ -31,8 +31,9 @@ class AutoSpeakNotifier extends StateNotifier<bool> {
 final autoSpeakProvider =
     StateNotifierProvider<AutoSpeakNotifier, bool>((ref) => AutoSpeakNotifier());
 
-/// Speaking speed, 0.1–1.0. Slower than the platform default by design:
-/// these are single vocabulary words, not prose.
+/// Speaking speed for the LOCAL voice (words), 0.1–1.0. Slower than the
+/// platform default by design: these are single vocabulary words, not prose.
+/// Story narration has its own speed, set with the ElevenLabs voice.
 class SpeechRateNotifier extends StateNotifier<double> {
   SpeechRateNotifier() : super(0.45) {
     _load();
@@ -59,34 +60,36 @@ final speechRateProvider =
     StateNotifierProvider<SpeechRateNotifier, double>(
         (ref) => SpeechRateNotifier());
 
-/// Which engine narrates STORIES. Everything else — word taps, the flashcard
-/// answer, the word page — always uses the free local engine, so a paid API
-/// can only ever be spent on story narration.
-class NarrationSourceNotifier extends StateNotifier<NarrationSource> {
-  NarrationSourceNotifier() : super(NarrationSource.local) {
+/// How much of a story each press narrates. Persisted, because it's a
+/// working style rather than a per-story choice.
+class NarrationModeNotifier extends StateNotifier<NarrationMode> {
+  NarrationModeNotifier() : super(NarrationMode.whole) {
     _load();
   }
 
-  static const _key = 'narration_source';
+  static const _key = 'narration_mode';
 
   Future<void> _load() async {
     final p = await SharedPreferences.getInstance();
-    final saved = p.getString(_key);
-    state = saved == NarrationSource.elevenLabs.name
-        ? NarrationSource.elevenLabs
-        : NarrationSource.local;
+    state = p.getString(_key) == NarrationMode.sentence.name
+        ? NarrationMode.sentence
+        : NarrationMode.whole;
   }
 
-  Future<void> set(NarrationSource value) async {
+  Future<void> set(NarrationMode value) async {
     state = value;
     final p = await SharedPreferences.getInstance();
     await p.setString(_key, value.name);
   }
+
+  Future<void> toggle() => set(state == NarrationMode.whole
+      ? NarrationMode.sentence
+      : NarrationMode.whole);
 }
 
-final narrationSourceProvider =
-    StateNotifierProvider<NarrationSourceNotifier, NarrationSource>(
-        (ref) => NarrationSourceNotifier());
+final narrationModeProvider =
+    StateNotifierProvider<NarrationModeNotifier, NarrationMode>(
+        (ref) => NarrationModeNotifier());
 
 /// The single story-narration player. Kept app-wide so starting one story
 /// stops whatever else was speaking.

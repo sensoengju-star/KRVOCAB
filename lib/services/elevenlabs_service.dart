@@ -24,10 +24,26 @@ class ElevenLabsService {
   static const _kApiKey = 'eleven_api_key';
   static const _kVoiceId = 'eleven_voice_id';
   static const _kModelId = 'eleven_model_id';
+  static const _kSpeed = 'eleven_speed';
+  static const _kStability = 'eleven_stability';
 
-  /// A stock ElevenLabs voice, used until the user picks their own. Any voice
-  /// can speak Korean when paired with a multilingual model.
-  static const defaultVoiceId = '21m00Tcm4TlvDq8ikWAM';
+  /// ElevenLabs accepts 0.7–1.2, where below 1.0 is slower. The default is
+  /// deliberately under 1.0: the API's natural pace is native-speaker speed,
+  /// which is too fast to follow when you're still reading Hangul.
+  static const double minSpeed = 0.7;
+  static const double maxSpeed = 1.2;
+  static const double defaultSpeed = 0.82;
+
+  /// How consistent the delivery is between requests. High on purpose: the
+  /// low end lets the model reinterpret each line, which is what makes a
+  /// story lurch in tone from sentence to sentence.
+  static const double defaultStability = 0.75;
+
+  /// Yu Haon — a Korean-NATIVE library voice, calm and built for narration.
+  /// The stock ElevenLabs voices are English speakers rendering Korean
+  /// through the multilingual model, and their phonetics leak through; a
+  /// native voice is what actually sounds right.
+  static const defaultVoiceId = 'B8rl62CpT9zOQ7RC3Mdl';
 
   /// Korean-capable models, best-quality first.
   static const models = <String, String>{
@@ -58,11 +74,34 @@ class ElevenLabsService {
     return p.getString(_kModelId) ?? models.keys.first;
   }
 
-  Future<void> save({String? apiKey, String? voiceId, String? modelId}) async {
+  Future<double> speed() async {
+    final p = await SharedPreferences.getInstance();
+    final v = p.getDouble(_kSpeed) ?? defaultSpeed;
+    return v.clamp(minSpeed, maxSpeed);
+  }
+
+  Future<double> stability() async {
+    final p = await SharedPreferences.getInstance();
+    return (p.getDouble(_kStability) ?? defaultStability).clamp(0.0, 1.0);
+  }
+
+  Future<void> save({
+    String? apiKey,
+    String? voiceId,
+    String? modelId,
+    double? speed,
+    double? stability,
+  }) async {
     final p = await SharedPreferences.getInstance();
     if (apiKey != null) await p.setString(_kApiKey, apiKey.trim());
     if (voiceId != null) await p.setString(_kVoiceId, voiceId.trim());
     if (modelId != null) await p.setString(_kModelId, modelId);
+    if (speed != null) {
+      await p.setDouble(_kSpeed, speed.clamp(minSpeed, maxSpeed));
+    }
+    if (stability != null) {
+      await p.setDouble(_kStability, stability.clamp(0.0, 1.0));
+    }
   }
 
   Future<void> clearKey() async {
@@ -97,13 +136,32 @@ class ElevenLabsService {
   }
 
   /// Path to an MP3 of [text], synthesizing it only if it isn't cached.
-  Future<File> audioFor(String text) async {
+  ///
+  /// [previousText] and [nextText] are the neighbouring sentences. They are
+  /// NOT spoken — they only condition the delivery, so a story keeps one
+  /// voice and one tone from the first line to the last instead of being
+  /// re-improvised sentence by sentence.
+  Future<File> audioFor(
+    String text, {
+    String? previousText,
+    String? nextText,
+  }) async {
     final key = await apiKey();
     if (key == null) throw const ElevenLabsException('No API key saved.');
 
     final voice = await voiceId();
     final model = await modelId();
-    final file = await _cacheFile(text, voice, model);
+    final rate = await speed();
+    final steadiness = await stability();
+    final file = await _cacheFile(
+      text,
+      voice,
+      model,
+      rate,
+      steadiness,
+      previousText,
+      nextText,
+    );
     if (await file.exists() && await file.length() > 0) return file;
 
     final res = await http
@@ -114,7 +172,28 @@ class ElevenLabsService {
             'Content-Type': 'application/json',
             'Accept': 'audio/mpeg',
           },
-          body: jsonEncode({'text': text, 'model_id': model}),
+          body: jsonEncode({
+            'text': text,
+            'model_id': model,
+            // Context for prosody only — neither is spoken.
+            if (previousText != null && previousText.trim().isNotEmpty)
+              'previous_text': previousText,
+            if (nextText != null && nextText.trim().isNotEmpty)
+              'next_text': nextText,
+            'voice_settings': {
+              // Pace is a voice setting, not a playback rate — the model
+              // performs the line slower rather than the audio being
+              // stretched.
+              'speed': rate,
+              // Pinned rather than left to the voice's defaults: these three
+              // are what decide how much the model is allowed to reinterpret
+              // a line, and drifting tone is exactly that freedom in action.
+              'stability': steadiness,
+              'similarity_boost': 0.85,
+              'style': 0.0,
+              'use_speaker_boost': true,
+            },
+          }),
         )
         .timeout(const Duration(seconds: 60));
 
@@ -146,9 +225,27 @@ class ElevenLabsService {
     return dir;
   }
 
-  Future<File> _cacheFile(String text, String voice, String model) async {
+  /// Everything that changes how the line SOUNDS is part of the key —
+  /// speed, stability, and the neighbouring sentences that condition it.
+  /// Otherwise a slider move would keep replaying the old delivery, and a
+  /// sentence cached mid-story would come back with the wrong prosody.
+  Future<File> _cacheFile(
+    String text,
+    String voice,
+    String model,
+    double speed,
+    double stability,
+    String? previousText,
+    String? nextText,
+  ) async {
     final dir = await _dir();
-    final digest = sha1.convert(utf8.encode('$voice|$model|$text')).toString();
+    final context = sha1
+        .convert(utf8.encode('${previousText ?? ''}|${nextText ?? ''}'))
+        .toString()
+        .substring(0, 8);
+    final key = '$voice|$model|${speed.toStringAsFixed(2)}'
+        '|${stability.toStringAsFixed(2)}|$context|$text';
+    final digest = sha1.convert(utf8.encode(key)).toString();
     return File('${dir.path}${Platform.pathSeparator}$digest.mp3');
   }
 

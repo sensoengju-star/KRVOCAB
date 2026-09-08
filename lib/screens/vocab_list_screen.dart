@@ -8,12 +8,14 @@ import 'package:share_plus/share_plus.dart';
 
 import '../models/vocab_word.dart';
 import '../providers/vocab_provider.dart';
+import '../providers/word_set_provider.dart';
 import '../services/hangul.dart';
 import '../services/llm_launcher.dart';
 import '../services/llm_service.dart';
 import '../theme/app_colors.dart';
 import '../widgets/gold_button.dart';
 import '../widgets/vocab_tile.dart';
+import '../widgets/word_sets_sheet.dart';
 import 'word_detail_screen.dart';
 
 class VocabListScreen extends ConsumerStatefulWidget {
@@ -30,6 +32,10 @@ class _VocabListScreenState extends ConsumerState<VocabListScreen> {
   /// Drives the clear button only — kept separate from the (debounced) query
   /// so the ✕ appears the instant the user types.
   bool _hasSearchText = false;
+
+  /// Filters start folded away so the words themselves get the screen. The
+  /// compact bar still shows whether any filter is active.
+  bool _filtersOpen = false;
 
   @override
   void dispose() {
@@ -94,13 +100,28 @@ class _VocabListScreenState extends ConsumerState<VocabListScreen> {
     final counts = ref.watch(vocabCountsProvider);
     final groupByBlock = ref.watch(groupByBlockProvider);
     final blockFilter = ref.watch(blockFilterProvider);
+    final combined = ref.watch(combinedViewProvider);
+    final daily = ref.watch(dailyWordsProvider);
+    final setAside = ref.watch(setAsideIdsProvider);
+    final showSetAside = ref.watch(showSetAsideProvider);
+    // The combined list is today's draw — unless a search or filter is on,
+    // in which case it falls back to the whole collection (see
+    // filteredVocabProvider).
+    final dailyActive = combined &&
+        daily.ready &&
+        daily.ids.isNotEmpty &&
+        ref.watch(searchQueryProvider).trim().isEmpty &&
+        pos == null &&
+        blockFilter == null;
 
     // Group pagination — active on the Learning and Reinforcement tabs (both
     // in groups of 25), and only when there's more than one group's worth of
     // words. The selected group on each tab is also what the Stories tab
     // draws from.
-    final isReinforce = section == VocabSection.reinforcement;
-    final isLearning = section == VocabSection.learning;
+    // Group pagination belongs to a single-type list; the combined view
+    // shows everything at once (the list is lazily built either way).
+    final isReinforce = !combined && section == VocabSection.reinforcement;
+    final isLearning = !combined && section == VocabSection.learning;
     final groupSize =
         isReinforce ? reinforcementGroupSize : learningGroupSize;
     final groupProvider =
@@ -132,23 +153,25 @@ class _VocabListScreenState extends ConsumerState<VocabListScreen> {
             // stacked down the page. Search leads, because it's what you reach
             // for first.
             Container(
-              margin: const EdgeInsets.fromLTRB(14, 10, 14, 6),
-              padding: const EdgeInsets.fromLTRB(10, 10, 10, 6),
+              margin: const EdgeInsets.fromLTRB(12, 6, 12, 4),
+              padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
               decoration: BoxDecoration(
                 color: AppColors.surface(context),
-                borderRadius: BorderRadius.circular(AppRadius.lg),
+                borderRadius: BorderRadius.circular(AppRadius.md),
                 border: Border.all(color: AppColors.hairline(context)),
-                boxShadow: AppColors.cardShadow(context),
               ),
               child: Column(
                 children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(2, 0, 2, 10),
-              child: TextField(
+            // Always-visible row: search plus the filter disclosure. Anything
+            // that isn't search lives behind it, so the list gets the space.
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
                 controller: _searchController,
                 onChanged: _onSearchChanged,
                 // The field accepts Hangul, so it's set in the Korean face.
-                style: GoogleFonts.notoSerifKr(fontSize: 15),
+                style: GoogleFonts.notoSerifKr(fontSize: 14),
                 decoration: InputDecoration(
                   prefixIcon: const Icon(Icons.search,
                       color: AppColors.antiqueGold, size: 19),
@@ -165,7 +188,8 @@ class _VocabListScreenState extends ConsumerState<VocabListScreen> {
                           onPressed: _clearSearch,
                         )
                       : null,
-                  contentPadding: const EdgeInsets.symmetric(vertical: 13),
+                  isDense: true,
+                  contentPadding: const EdgeInsets.symmetric(vertical: 9),
                   // Fully rounded — a search field should read as a pill.
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(30),
@@ -180,17 +204,44 @@ class _VocabListScreenState extends ConsumerState<VocabListScreen> {
                     borderSide: const BorderSide(
                         color: AppColors.antiqueGold, width: 1.6),
                   ),
+                  ),
                 ),
-              ),
+                ),
+                const SizedBox(width: 6),
+                // Which words are listed — always reachable, since it's the
+                // switch you actually flip while studying.
+                _TypeDropdown(
+                  combined: combined,
+                  section: section,
+                  learning: counts.learning,
+                  reinforced: counts.reinforcement,
+                  total: counts.total,
+                  onChanged: (c, sec) {
+                    ref.read(combinedViewProvider.notifier).state = c;
+                    if (sec != null) {
+                      ref.read(vocabSectionProvider.notifier).state = sec;
+                    }
+                  },
+                ),
+                const SizedBox(width: 6),
+                _FilterDisclosure(
+                  open: _filtersOpen,
+                  activeCount: (pos != null ? 1 : 0) +
+                      (blockFilter != null ? 1 : 0) +
+                      (groupByBlock ? 1 : 0),
+                  onTap: () => setState(() => _filtersOpen = !_filtersOpen),
+                ),
+              ],
             ),
-            _SectionSelector(
-              section: section,
-              learningCount: counts.learning,
-              reinforcementCount: counts.reinforcement,
-              totalCount: counts.total,
-              onChanged: (s) =>
-                  ref.read(vocabSectionProvider.notifier).state = s,
-            ),
+            AnimatedCrossFade(
+              duration: const Duration(milliseconds: 200),
+              sizeCurve: Curves.easeOutCubic,
+              crossFadeState: _filtersOpen
+                  ? CrossFadeState.showSecond
+                  : CrossFadeState.showFirst,
+              firstChild: const SizedBox(width: double.infinity),
+              secondChild: Column(
+                children: [
             SizedBox(
               height: 44,
               child: ListView(
@@ -238,7 +289,11 @@ class _VocabListScreenState extends ConsumerState<VocabListScreen> {
                 ],
               ),
             ),
-            if (section == VocabSection.learning &&
+                ],
+              ),
+            ),
+            if (!combined &&
+                section == VocabSection.learning &&
                 !showGroupPicker &&
                 words.isNotEmpty)
               Padding(
@@ -268,7 +323,8 @@ class _VocabListScreenState extends ConsumerState<VocabListScreen> {
                   },
                 ),
               ),
-            if (section == VocabSection.reinforcement &&
+            if (!combined &&
+                section == VocabSection.reinforcement &&
                 !showGroupPicker &&
                 words.isNotEmpty)
               Padding(
@@ -298,13 +354,40 @@ class _VocabListScreenState extends ConsumerState<VocabListScreen> {
                   },
                 ),
               ),
-            // "All" tab — copy/share the full list with Korean, English and
-            // (for verbs) the present polite form.
-            if (section == VocabSection.all && words.isNotEmpty)
+            // Words held in a review set are hidden from the list. Say so
+            // where the missing words would have been, with the switch that
+            // brings them back — otherwise they just look deleted.
+            if (setAside.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(24, 6, 24, 0),
+                child: _SetAsideStrip(
+                  count: setAside.length,
+                  showing: showSetAside,
+                  onToggle: () => ref
+                      .read(showSetAsideProvider.notifier)
+                      .state = !showSetAside,
+                  onOpenShelf: () => WordSetsSheet.show(context),
+                ),
+              ),
+            if (combined && daily.ready && counts.total > 0)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(24, 4, 24, 0),
+                child: _DailySetBanner(
+                  shown: words.length,
+                  cycleShown: daily.cycleShown,
+                  total: counts.total,
+                  active: dailyActive,
+                  onShuffle: () =>
+                      ref.read(dailyWordsProvider.notifier).reshuffle(),
+                ),
+              ),
+            // Combined view — copy/share the full list with Korean, English
+            // and (for verbs) the present polite form.
+            if (combined && words.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.fromLTRB(24, 4, 24, 0),
                 child: _ExportSectionRow(
-                  label: 'All words',
+                  label: 'Learning + Reinforced',
                   icon: Icons.copy_all_outlined,
                   count: words.length,
                   onCopy: () async {
@@ -441,6 +524,7 @@ class _VocabListScreenState extends ConsumerState<VocabListScreen> {
                             final w = (row as _WordRow).word;
                             return VocabTile(
                               word: w,
+                              setAside: setAside.contains(w.id),
                               onTap: () => _openWordPage(w),
                               onEdit: () => _openEdit(w),
                               onDelete: () => _confirmDelete(w),
@@ -772,154 +856,85 @@ String _emptyMessage(VocabSection s) {
     case VocabSection.reinforcement:
       return 'No reinforced words yet — tap the ↻ icon on any card to keep it '
           'in rotation.';
-    case VocabSection.all:
-      return 'Your hangul garden awaits 🌸';
   }
 }
 
-/// Segmented control for Learning / Reinforcement / All.
-class _SectionSelector extends StatelessWidget {
-  const _SectionSelector({
-    required this.section,
-    required this.learningCount,
-    required this.reinforcementCount,
-    required this.totalCount,
-    required this.onChanged,
-  });
-
-  final VocabSection section;
-  final int learningCount;
-  final int reinforcementCount;
-  final int totalCount;
-  final ValueChanged<VocabSection> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: AppColors.inset(context),
-        borderRadius: BorderRadius.circular(AppRadius.sm),
-        border: Border.all(color: AppColors.hairline(context)),
-      ),
-      padding: const EdgeInsets.all(4),
-      child: Row(
-        children: [
-          Expanded(
-            child: _SectionTab(
-              label: 'Learning',
-              count: learningCount,
-              color: AppColors.statusLearning,
-              active: section == VocabSection.learning,
-              onTap: () => onChanged(VocabSection.learning),
-            ),
-          ),
-          Expanded(
-            child: _SectionTab(
-              label: 'Reinforced',
-              count: reinforcementCount,
-              color: AppColors.statusReinforcement,
-              active: section == VocabSection.reinforcement,
-              onTap: () => onChanged(VocabSection.reinforcement),
-            ),
-          ),
-          Expanded(
-            child: _SectionTab(
-              label: 'All',
-              count: totalCount,
-              color: AppColors.plum,
-              active: section == VocabSection.all,
-              onTap: () => onChanged(VocabSection.all),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _SectionTab extends StatelessWidget {
-  const _SectionTab({
-    required this.label,
-    required this.count,
-    required this.color,
-    required this.active,
+/// Opens and closes the filter panel, badging how many filters are on so a
+/// hidden filter can never quietly narrow the list.
+class _FilterDisclosure extends StatelessWidget {
+  const _FilterDisclosure({
+    required this.open,
+    required this.activeCount,
     required this.onTap,
   });
-  final String label;
-  final int count;
 
-  /// The section's identity colour — carried through to the tile spines.
-  final Color color;
-  final bool active;
+  final bool open;
+  final int activeCount;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final radius = BorderRadius.circular(AppRadius.xs);
-    return Material(
-      color: Colors.transparent,
-      borderRadius: radius,
-      child: InkWell(
-        borderRadius: radius,
-        onTap: onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 220),
-          curve: Curves.easeOutCubic,
-          padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 4),
-          decoration: BoxDecoration(
-            borderRadius: radius,
-            color: active ? AppColors.surface(context) : null,
-            boxShadow: active
-                ? const [
-                    BoxShadow(
-                      color: Color(0x1F2C2825),
-                      blurRadius: 6,
-                      offset: Offset(0, 2),
+    final on = open || activeCount > 0;
+    return Tooltip(
+      message: open ? '필터 접기' : '필터 펼치기',
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(AppRadius.xs),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(AppRadius.xs),
+          onTap: onTap,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              color: on ? AppColors.goldTint(context) : AppColors.inset(context),
+              borderRadius: BorderRadius.circular(AppRadius.xs),
+              border: Border.all(
+                color: on
+                    ? AppColors.antiqueGold.withValues(alpha: 0.6)
+                    : AppColors.hairline(context),
+              ),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.tune,
+                  size: 16,
+                  color: on ? AppColors.deepGold : AppColors.mutedInk(context),
+                ),
+                if (activeCount > 0) ...[
+                  const SizedBox(width: 5),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: AppColors.deepGold,
+                      borderRadius: BorderRadius.circular(20),
                     ),
-                  ]
-                : null,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              FittedBox(
-                fit: BoxFit.scaleDown,
-                child: Text(
-                  label,
-                  style: GoogleFonts.inter(
-                    // A raised tab tinted with the section's own colour reads
-                    // cleaner than four competing gold-gradient blocks.
-                    color: active
-                        ? AppColors.onSurfaceAccent(context, color)
-                        : AppColors.mutedInk(context),
-                    fontSize: 11.5,
-                    fontWeight: active ? FontWeight.w700 : FontWeight.w600,
-                    letterSpacing: 0.1,
+                    child: Text(
+                      '$activeCount',
+                      style: GoogleFonts.inter(
+                        color: Colors.white,
+                        fontSize: 9.5,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
+                const SizedBox(width: 3),
+                AnimatedRotation(
+                  turns: open ? 0.5 : 0,
+                  duration: const Duration(milliseconds: 180),
+                  child: Icon(
+                    Icons.keyboard_arrow_down,
+                    size: 16,
+                    color:
+                        on ? AppColors.deepGold : AppColors.mutedInk(context),
                   ),
                 ),
-              ),
-              const SizedBox(height: 3),
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 220),
-                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
-                decoration: BoxDecoration(
-                  color: active
-                      ? AppColors.tintOf(context, color)
-                      : Colors.transparent,
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Text(
-                  '$count',
-                  style: GoogleFonts.inter(
-                    color: active
-                        ? AppColors.onSurfaceAccent(context, color)
-                        : AppColors.mutedInk(context).withValues(alpha: 0.75),
-                    fontSize: 10.5,
-                    fontWeight: active ? FontWeight.w700 : FontWeight.w500,
-                  ),
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -1048,6 +1063,177 @@ String _buildDetailedExport(List<VocabWord> words) {
 /// Group dropdown — paginates a section [groupSize] words at a time and
 /// exposes copy/share actions over the current group. Used by both the
 /// Learned (10s) and Reinforcement (25s) tabs.
+/// The header for the combined list's daily draw.
+///
+/// It answers the two questions the ten words raise: why are there only ten,
+/// and how much of the collection is left before they start repeating.
+/// Header strip shown whenever some words are held in a put-aside set.
+///
+/// It exists so an archived word never reads as a deleted one: it names how
+/// many are hidden, brings them back into view temporarily, and offers the
+/// shelf where a whole set is switched back on for good.
+class _SetAsideStrip extends StatelessWidget {
+  const _SetAsideStrip({
+    required this.count,
+    required this.showing,
+    required this.onToggle,
+    required this.onOpenShelf,
+  });
+
+  final int count;
+  final bool showing;
+  final VoidCallback onToggle;
+  final VoidCallback onOpenShelf;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 7, 6, 7),
+      decoration: BoxDecoration(
+        color: AppColors.inset(context),
+        borderRadius: BorderRadius.circular(AppRadius.sm),
+        border: Border.all(color: AppColors.hairline(context)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.inventory_2_outlined,
+              size: 15, color: AppColors.mutedInk(context)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              showing ? '보관 중인 단어 $count개를 함께 보는 중' : '보관 중인 단어 $count개는 숨겨져 있어요',
+              style: GoogleFonts.notoSerifKr(
+                color: AppColors.mutedInk(context),
+                fontSize: 12,
+              ),
+            ),
+          ),
+          TextButton(
+            onPressed: onToggle,
+            style: TextButton.styleFrom(
+              foregroundColor: AppColors.antiqueGold,
+              visualDensity: VisualDensity.compact,
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+            ),
+            child: Text(
+              showing ? '숨기기' : '보기',
+              style: GoogleFonts.notoSerifKr(
+                  fontSize: 12, fontWeight: FontWeight.w700),
+            ),
+          ),
+          Tooltip(
+            message: '보관한 세트',
+            child: IconButton(
+              onPressed: onOpenShelf,
+              visualDensity: VisualDensity.compact,
+              icon: Icon(Icons.chevron_right,
+                  size: 18, color: AppColors.mutedInk(context)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DailySetBanner extends StatelessWidget {
+  const _DailySetBanner({
+    required this.shown,
+    required this.cycleShown,
+    required this.total,
+    required this.active,
+    required this.onShuffle,
+  });
+
+  /// How many words are on screen.
+  final int shown;
+
+  /// Words already spent in the current cycle.
+  final int cycleShown;
+
+  /// The whole collection.
+  final int total;
+
+  /// False while a search or filter has suspended the draw.
+  final bool active;
+
+  final VoidCallback onShuffle;
+
+  @override
+  Widget build(BuildContext context) {
+    final progress = total == 0 ? 0.0 : (cycleShown / total).clamp(0.0, 1.0);
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 10, 8, 10),
+      decoration: BoxDecoration(
+        color: AppColors.goldTint(context),
+        borderRadius: BorderRadius.circular(AppRadius.sm),
+        border: Border.all(
+            color: AppColors.antiqueGold.withValues(alpha: 0.28)),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            active ? Icons.today_outlined : Icons.search,
+            size: 17,
+            color: AppColors.antiqueGold,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  active ? '오늘의 단어 $shown개' : '검색 중 — 전체 단어에서 찾는 중',
+                  style: GoogleFonts.notoSerifKr(
+                    color: AppColors.ink(context),
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  active
+                      ? '매일 새로 뽑혀요 · 이번 주기 $cycleShown / $total'
+                      : '검색이나 필터를 지우면 오늘의 단어로 돌아가요',
+                  style: GoogleFonts.notoSerifKr(
+                    color: AppColors.mutedInk(context),
+                    fontSize: 11.5,
+                    height: 1.35,
+                  ),
+                ),
+                if (active) ...[
+                  const SizedBox(height: 7),
+                  // How much of the collection this rotation has covered. It
+                  // resets when every word has had its day.
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: LinearProgressIndicator(
+                      value: progress,
+                      minHeight: 4,
+                      backgroundColor:
+                          AppColors.antiqueGold.withValues(alpha: 0.16),
+                      valueColor: const AlwaysStoppedAnimation(
+                          AppColors.antiqueGold),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          if (active)
+            IconButton(
+              tooltip: '다시 뽑기',
+              icon: const Icon(Icons.casino_outlined,
+                  size: 18, color: AppColors.antiqueGold),
+              onPressed: onShuffle,
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 class _GroupPicker extends StatelessWidget {
   const _GroupPicker({
     required this.group,
@@ -1166,6 +1352,179 @@ class _GroupPicker extends StatelessWidget {
 /// Part-of-speech chip. Each part of speech owns a colour from the 오방색
 /// set, so the filter row doubles as the legend for the coloured chips on
 /// every card.
+/// Picks what the list shows: both types together, or one on its own.
+///
+/// Lives in the always-visible row rather than the filter panel — switching
+/// between learning and reinforced words is the thing you do constantly, and
+/// having to unfold a panel for it every time was the wrong trade.
+class _TypeDropdown extends StatelessWidget {
+  const _TypeDropdown({
+    required this.combined,
+    required this.section,
+    required this.learning,
+    required this.reinforced,
+    required this.total,
+    required this.onChanged,
+  });
+
+  final bool combined;
+  final VocabSection section;
+  final int learning;
+  final int reinforced;
+  final int total;
+
+  /// (combined, section) — section is null when picking the combined view.
+  final void Function(bool combined, VocabSection? section) onChanged;
+
+  Color get _color => combined
+      ? AppColors.plum
+      : (section == VocabSection.reinforcement
+          ? AppColors.statusReinforcement
+          : AppColors.statusLearning);
+
+  String get _label => combined
+      ? '함께'
+      : (section == VocabSection.reinforcement ? '복습' : '학습');
+
+  int get _count => combined
+      ? total
+      : (section == VocabSection.reinforcement ? reinforced : learning);
+
+  @override
+  Widget build(BuildContext context) {
+    return PopupMenuButton<int>(
+      tooltip: '무엇을 볼까요',
+      position: PopupMenuPosition.under,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppRadius.sm),
+        side: BorderSide(color: AppColors.hairline(context)),
+      ),
+      color: AppColors.surface(context),
+      onSelected: (v) {
+        switch (v) {
+          case 0:
+            onChanged(true, null);
+            break;
+          case 1:
+            onChanged(false, VocabSection.learning);
+            break;
+          case 2:
+            onChanged(false, VocabSection.reinforcement);
+            break;
+        }
+      },
+      itemBuilder: (context) => [
+        _item(context, 0, '함께 보기', 'both together', total,
+            AppColors.plum, combined),
+        _item(context, 1, '학습 중', 'learning', learning,
+            AppColors.statusLearning,
+            !combined && section == VocabSection.learning),
+        _item(context, 2, '복습 중', 'reinforced', reinforced,
+            AppColors.statusReinforcement,
+            !combined && section == VocabSection.reinforcement),
+      ],
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(9, 8, 4, 8),
+        decoration: BoxDecoration(
+          color: AppColors.tintOf(context, _color),
+          borderRadius: BorderRadius.circular(AppRadius.xs),
+          border: Border.all(color: _color.withValues(alpha: 0.55)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 8,
+              height: 8,
+              decoration: BoxDecoration(shape: BoxShape.circle, color: _color),
+            ),
+            const SizedBox(width: 7),
+            Text(
+              _label,
+              style: GoogleFonts.notoSerifKr(
+                color: AppColors.onSurfaceAccent(context, _color),
+                fontSize: 12.5,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(width: 5),
+            Text(
+              '$_count',
+              style: GoogleFonts.inter(
+                color: AppColors.mutedInk(context),
+                fontSize: 10.5,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const Icon(Icons.arrow_drop_down,
+                size: 18, color: AppColors.antiqueGold),
+          ],
+        ),
+      ),
+    );
+  }
+
+  PopupMenuItem<int> _item(
+    BuildContext context,
+    int value,
+    String korean,
+    String english,
+    int count,
+    Color color,
+    bool selected,
+  ) {
+    return PopupMenuItem<int>(
+      value: value,
+      child: Row(
+        children: [
+          Container(
+            width: 9,
+            height: 9,
+            decoration: BoxDecoration(shape: BoxShape.circle, color: color),
+          ),
+          const SizedBox(width: 10),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                korean,
+                style: GoogleFonts.notoSerifKr(
+                  color: selected
+                      ? AppColors.onSurfaceAccent(context, color)
+                      : AppColors.ink(context),
+                  fontSize: 14,
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                ),
+              ),
+              Text(
+                english,
+                style: GoogleFonts.inter(
+                  color: AppColors.mutedInk(context),
+                  fontSize: 10.5,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(width: 14),
+          Text(
+            '$count',
+            style: GoogleFonts.inter(
+              color: AppColors.mutedInk(context),
+              fontSize: 11.5,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          if (selected) ...[
+            const SizedBox(width: 8),
+            const Icon(Icons.check, size: 15, color: AppColors.deepGold),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
 class _FilterChip extends StatelessWidget {
   const _FilterChip({
     required this.label,
@@ -1498,6 +1857,117 @@ class _BlockChip extends StatelessWidget {
   }
 }
 
+/// Chooses whether the word being added or edited goes to the Learning or
+/// the Reinforced list. Uses the same two colours the tiles do, so the choice
+/// here reads as the colour you'll see in the list afterwards.
+class _StatusPicker extends StatelessWidget {
+  const _StatusPicker({required this.status, required this.onChanged});
+
+  final WordStatus status;
+  final ValueChanged<WordStatus> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    Widget option(WordStatus value, String korean, String english, Color color) {
+      final active = value == status;
+      final radius = BorderRadius.circular(AppRadius.xs);
+      return Expanded(
+        child: Material(
+          color: Colors.transparent,
+          borderRadius: radius,
+          child: InkWell(
+            borderRadius: radius,
+            onTap: () => onChanged(value),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+              decoration: BoxDecoration(
+                color: active ? AppColors.tintOf(context, color) : null,
+                borderRadius: radius,
+                border: Border.all(
+                  color: active ? color.withValues(alpha: 0.7) : Colors.transparent,
+                ),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Container(
+                    width: 9,
+                    height: 9,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: active
+                          ? color
+                          : color.withValues(alpha: 0.35),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          korean,
+                          style: GoogleFonts.notoSerifKr(
+                            color: active
+                                ? AppColors.onSurfaceAccent(context, color)
+                                : AppColors.mutedInk(context),
+                            fontSize: 14,
+                            fontWeight:
+                                active ? FontWeight.w700 : FontWeight.w500,
+                          ),
+                        ),
+                        Text(
+                          english,
+                          style: GoogleFonts.inter(
+                            color: AppColors.mutedInk(context),
+                            fontSize: 10,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '어디에 넣을까요',
+          style: GoogleFonts.notoSerifKr(
+            color: AppColors.mutedInk(context),
+            fontSize: 12.5,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Container(
+          decoration: BoxDecoration(
+            color: AppColors.inset(context),
+            borderRadius: BorderRadius.circular(AppRadius.sm),
+            border: Border.all(color: AppColors.hairline(context)),
+          ),
+          padding: const EdgeInsets.all(4),
+          child: Row(
+            children: [
+              option(WordStatus.learning, '학습 중', 'Learning',
+                  AppColors.statusLearning),
+              option(WordStatus.reinforcement, '복습 중', 'Reinforced',
+                  AppColors.statusReinforcement),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 /// The add/edit sheet is written in Korean, so its labels and hints need the
 /// Korean face rather than the theme's Inter defaults.
 TextStyle _sheetLabel(BuildContext context) => GoogleFonts.notoSerifKr(
@@ -1527,6 +1997,11 @@ class _AddWordSheetState extends ConsumerState<AddWordSheet> {
   final _polite = TextEditingController();
   String _pos = PartsOfSpeech.noun;
 
+  /// Which list the word lands in. A new word follows the tab you added it
+  /// from, so adding while reading 복습 files it as reinforced without a
+  /// second tap. The picker below still overrides it.
+  late WordStatus _status;
+
   final Set<String> _userSet = {};
   Timer? _debounce;
   int _fillRequestId = 0;
@@ -1536,10 +2011,22 @@ class _AddWordSheetState extends ConsumerState<AddWordSheet> {
 
   bool get _isEditing => widget.existing != null;
 
+  /// The status implied by the list on screen behind the sheet.
+  WordStatus _statusForCurrentTab() {
+    if (ref.read(combinedViewProvider)) return WordStatus.learning;
+    return ref.read(vocabSectionProvider) == VocabSection.reinforcement
+        ? WordStatus.reinforcement
+        : WordStatus.learning;
+  }
+
   @override
   void initState() {
     super.initState();
     final w = widget.existing;
+    // Editing keeps the word's current status; a new word takes the status of
+    // the tab it was added from. 함께 implies neither type, so it falls back
+    // to Learning — where a word you've only just met belongs.
+    _status = w?.status ?? _statusForCurrentTab();
     if (w != null) {
       _hangul.text = w.hangul;
       _roman.text = w.romanization;
@@ -1747,21 +2234,12 @@ class _AddWordSheetState extends ConsumerState<AddWordSheet> {
                 englishMeaning: e,
                 partOfSpeech: _pos,
                 politeForm: _polite.text.trim(),
+                status: _status,
               ),
             );
       } else {
         // Add: drop the new word into whichever section the user is viewing.
         // (All / Learning both default to learning.)
-        WordStatus status;
-        switch (ref.read(vocabSectionProvider)) {
-          case VocabSection.reinforcement:
-            status = WordStatus.reinforcement;
-            break;
-          case VocabSection.learning:
-          case VocabSection.all:
-            status = WordStatus.learning;
-            break;
-        }
         await ref.read(vocabProvider.notifier).add(
               VocabWord(
                 id: 'w-${DateTime.now().millisecondsSinceEpoch}',
@@ -1771,7 +2249,7 @@ class _AddWordSheetState extends ConsumerState<AddWordSheet> {
                 partOfSpeech: _pos,
                 dateAdded: DateTime.now(),
                 politeForm: _polite.text.trim(),
-                status: status,
+                status: _status,
               ),
             );
       }
@@ -1912,6 +2390,11 @@ class _AddWordSheetState extends ConsumerState<AddWordSheet> {
                   labelText: '품사',
                   labelStyle: _sheetLabel(context),
                 ),
+              ),
+              const SizedBox(height: 18),
+              _StatusPicker(
+                status: _status,
+                onChanged: (v) => setState(() => _status = v),
               ),
               const SizedBox(height: 24),
               GoldButton(

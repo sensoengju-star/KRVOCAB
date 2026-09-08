@@ -10,10 +10,12 @@ import '../models/vocab_word.dart';
 import '../providers/vocab_provider.dart';
 import '../services/llm_launcher.dart';
 import '../services/llm_service.dart';
+import '../services/story_store.dart';
 import '../theme/app_colors.dart';
 import '../widgets/gold_button.dart';
 import '../widgets/story_card.dart';
 import '../widgets/mugunghwa_spinner.dart';
+import 'saved_stories_screen.dart';
 
 /// "Stories" tab — generates several short Korean stories that weave in the
 /// learner's vocabulary words. Replaces the old per-word example sentences.
@@ -30,12 +32,19 @@ class _ExamplesScreenState extends ConsumerState<ExamplesScreen> {
   bool _loading = false;
   bool _startingServer = false;
   String? _error;
+  /// The batch on screen. Written to the library once the stream finishes,
+  /// but kept visible here — the library is browsed on its own page.
   List<VocabStory> _stories = const [];
+
+  /// How many stories are in the library — the library itself has its own
+  /// page, this is just for the button's badge.
+  int _savedCount = 0;
   int _storyCount = 5;
 
   @override
   void initState() {
     super.initState();
+    _savedCount = StoryStore.instance.count;
     // The Review tab's "see examples" button still pushes a word here and
     // switches to this tab — treat that as a request to (re)generate stories.
     Future.microtask(() {
@@ -112,9 +121,19 @@ class _ExamplesScreenState extends ConsumerState<ExamplesScreen> {
             _error = e is LlmException ? e.message : 'Stream error.';
           });
         },
-        onDone: () {
+        onDone: () async {
           parseInto(done: true);
-          setState(() => _loading = false);
+          // Save only once the stream has finished: a half-written story
+          // parsed mid-flight shouldn't end up in the library. The batch
+          // stays on screen here; the library is browsed on its own page.
+          if (_stories.isNotEmpty) {
+            await StoryStore.instance.addAll(_stories);
+          }
+          if (!mounted) return;
+          setState(() {
+            _loading = false;
+            _savedCount = StoryStore.instance.count;
+          });
         },
       );
     } on LlmException catch (e) {
@@ -188,13 +207,29 @@ class _ExamplesScreenState extends ConsumerState<ExamplesScreen> {
           children: [
             Expanded(
               child: GoldButton(
-                label: _stories.isEmpty ? 'Generate Stories' : 'Regenerate',
+                label: _savedCount == 0 ? 'Generate Stories' : 'Write more',
                 icon: Icons.auto_stories,
                 onPressed: (_loading || storyWords.isEmpty) ? null : _generate,
                 expanded: true,
               ),
             ),
           ],
+        ),
+        const SizedBox(height: 10),
+        GoldOutlinedButton(
+          label: _savedCount == 0
+              ? 'Saved stories'
+              : 'Saved stories  ·  $_savedCount',
+          icon: Icons.bookmarks_outlined,
+          onPressed: () async {
+            await Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const SavedStoriesScreen()),
+            );
+            // The library page can delete stories — refresh the badge.
+            if (mounted) {
+              setState(() => _savedCount = StoryStore.instance.count);
+            }
+          },
         ),
         if (storyWords.isEmpty)
           Padding(
@@ -247,6 +282,8 @@ class _ExamplesScreenState extends ConsumerState<ExamplesScreen> {
           ),
         if (_error != null)
           _ErrorCard(message: _error!, onRetry: _generate),
+        // Streaming batch first (it isn't in the library until it finishes),
+        // then everything saved, newest first.
         for (final story in _stories)
           StoryCard(story: story, targets: targets, glossary: glossary),
         if (_loading && _stories.isNotEmpty)

@@ -299,9 +299,21 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ],
             ),
           ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
+          child: Text(
+            'Words are spoken by the local system voice — free, offline and '
+            'instant. Only story narration uses ElevenLabs.',
+            style: GoogleFonts.inter(
+              color: AppColors.mutedInk(context),
+              fontSize: 12,
+              height: 1.5,
+            ),
+          ),
+        ),
         _Tile(
           title: 'Speak the answer automatically',
-          subtitle: 'Pronounce each word when its card flips to the answer',
+          subtitle: 'Pronounce each word when its card turns to the answer',
           trailing: Switch(
             value: autoSpeak,
             activeColor: AppColors.antiqueGold,

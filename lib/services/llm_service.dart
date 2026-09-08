@@ -569,66 +569,120 @@ class LlmService {
     return null;
   }
 
-  /// Single short example sentence for [word]. Used by the Review screen to
-  /// reinforce a correct answer. Returns Korean + English in one shot —
-  /// non-streaming, fast, low temperature for predictable output.
+  /// Every example sentence handed out this session, normalized for
+  /// comparison. In memory only, deliberately: closing and reopening the app
+  /// is the reset, which is exactly what a refresh should mean.
+  final Set<String> _examplesThisSession = <String>{};
+
+  /// The sentences already written for each word, verbatim, so the model can
+  /// be shown what not to write again. Capped — a long avoid-list starts
+  /// crowding out the actual instruction.
+  final Map<String, List<String>> _examplesByWord = <String, List<String>>{};
+
+  static const int _maxAvoidList = 6;
+
+  /// Two sentences count as the same when only spacing or punctuation differs.
+  static final RegExp _exampleNoise = RegExp(r'[\s.,!?~`-]');
+
+  String _exampleKey(String s) =>
+      s.toLowerCase().replaceAll(_exampleNoise, '');
+
+  /// One example sentence for [word], used by the Review screen to reinforce
+  /// a correct answer.
+  ///
+  /// No sentence is served twice in a session: earlier sentences for the word
+  /// go into the prompt as an avoid-list, and anything that comes back
+  /// matching one already seen is rejected and asked for again at a higher
+  /// temperature. Returns null when three tries all come back repeats —
+  /// better no sentence than the same one over again.
   Future<({String korean, String english, String usedForm})?>
       generateOneExample(String word) async {
     final config = await LlmConfig.load();
-    final body = jsonEncode({
-      'model': config.modelAlias,
-      'stream': false,
-      'temperature': 0.5,
-      'max_tokens': 200,
-      'chat_template_kwargs': {'enable_thinking': false},
-      // NOTE: deliberately does NOT use _systemBase — that prompt forces verbs
-      // into their -다 dictionary form, which produces stilted, unnatural
-      // example sentences (e.g. "그는 학교에 가다"). Here we want a natural,
-      // properly-conjugated sentence.
-      'messages': [
-        {
-          'role': 'system',
-          'content':
-              'You are a Korean tutor for TOPIK I-II learners. Write ONE short, '
-              'natural-sounding example sentence that uses the target word, '
-              'conjugating or inflecting it naturally as the sentence requires '
-              '— use the everyday polite 해요체 style (e.g. -아요/-어요). Do NOT '
-              'leave a verb or adjective in its -다 dictionary form. Keep it at '
-              'TOPIK I-II level. Reply with ONLY a JSON object: '
-              '{"korean":"...","english":"...","used":"..."}. The "used" field '
-              'is the EXACT surface form of the target word as it literally '
-              'appears in your "korean" sentence (the conjugated substring, '
-              'copied verbatim — e.g. if you wrote "갔어요" put "갔어요").',
-        },
-        {
-          'role': 'user',
-          'content': 'Target word: "$word".',
-        }
-      ],
-    });
+    final avoid = _examplesByWord[word] ?? const <String>[];
 
-    try {
-      final response = await http
-          .post(
-            Uri.parse(config.endpoint),
-            headers: const {'Content-Type': 'application/json'},
-            body: body,
-          )
-          .timeout(const Duration(seconds: 20));
-      if (response.statusCode != 200) return null;
-      final decoded = jsonDecode(utf8.decode(response.bodyBytes));
-      final raw = decoded['choices']?[0]?['message']?['content'] as String?;
-      if (raw == null) return null;
-      final parsed = tryParseBuffer(raw);
-      if (parsed == null) return null;
-      final ko = (parsed['korean'] ?? '').toString().trim();
-      final en = (parsed['english'] ?? '').toString().trim();
-      final used = (parsed['used'] ?? '').toString().trim();
-      if (ko.isEmpty) return null;
-      return (korean: ko, english: en, usedForm: used);
-    } catch (_) {
-      return null;
+    // Rising temperature: the first ask stays predictable, and each repeat
+    // buys variety with a little more freedom.
+    const temperatures = [0.5, 0.85, 1.05];
+
+    for (final temperature in temperatures) {
+      final body = jsonEncode({
+        'model': config.modelAlias,
+        'stream': false,
+        'temperature': temperature,
+        // Room for a two-clause sentence plus its translation. The old 200
+        // was only ever enough for the fragments this used to produce.
+        'max_tokens': 420,
+        'chat_template_kwargs': {'enable_thinking': false},
+        // NOTE: deliberately does NOT use _systemBase — that prompt forces verbs
+        // into their -다 dictionary form, which produces stilted, unnatural
+        // example sentences (e.g. "그는 학교에 가다"). Here we want a natural,
+        // properly-conjugated sentence.
+        'messages': [
+          {
+            'role': 'system',
+            'content':
+                'You are a Korean tutor for TOPIK I-II learners. Write ONE '
+                'natural-sounding example sentence that uses the target word, '
+                'conjugating or inflecting it naturally as the sentence '
+                'requires — use the everyday polite 해요체 style (e.g. '
+                '-아요/-어요). Do NOT leave a verb or adjective in its -다 '
+                'dictionary form. Make it a FULL sentence with real context: '
+                'about 12 to 20 어절, built from TWO clauses joined by a '
+                'connective such as -고, -아서/-어서, -지만, -는데 or -(으)면. A '
+                'three-word fragment teaches nothing about how the word is '
+                'used. Keep every word in it at TOPIK I-II level. Reply with '
+                'ONLY a JSON object: {"korean":"...","english":"...",'
+                '"used":"..."}. The "used" field is the EXACT surface form of '
+                'the target word as it literally appears in your "korean" '
+                'sentence (the conjugated substring, copied verbatim — e.g. '
+                'if you wrote "갔어요" put "갔어요").',
+          },
+          {
+            'role': 'user',
+            'content': avoid.isEmpty
+                ? 'Target word: "$word".'
+                : 'Target word: "$word".\n\nYou have already written the '
+                    'sentences below for this word. Write a DIFFERENT one: a '
+                    'new situation, a different subject, a different ending.\n'
+                    '${avoid.map((s) => '- $s').join('\n')}',
+          }
+        ],
+      });
+
+      try {
+        final response = await http
+            .post(
+              Uri.parse(config.endpoint),
+              headers: const {'Content-Type': 'application/json'},
+              body: body,
+            )
+            .timeout(const Duration(seconds: 30));
+        if (response.statusCode != 200) return null;
+        final decoded = jsonDecode(utf8.decode(response.bodyBytes));
+        final raw = decoded['choices']?[0]?['message']?['content'] as String?;
+        if (raw == null) return null;
+        final parsed = tryParseBuffer(raw);
+        if (parsed == null) continue;
+        final ko = (parsed['korean'] ?? '').toString().trim();
+        final en = (parsed['english'] ?? '').toString().trim();
+        final used = (parsed['used'] ?? '').toString().trim();
+        if (ko.isEmpty) continue;
+
+        // add() is the duplicate check and the record in one move.
+        if (!_examplesThisSession.add(_exampleKey(ko))) continue;
+
+        final seen = _examplesByWord.putIfAbsent(word, () => <String>[]);
+        seen.add(ko);
+        if (seen.length > _maxAvoidList) seen.removeAt(0);
+
+        return (korean: ko, english: en, usedForm: used);
+      } catch (_) {
+        // A transport failure won't fix itself on the next pass, and three
+        // 30-second timeouts would leave the card waiting a minute and a half.
+        return null;
+      }
     }
+    return null;
   }
 
   /// Build the full study page for ONE word — definition, nuance, related
@@ -657,7 +711,9 @@ class LlmService {
       'model': config.modelAlias,
       'stream': false,
       'temperature': 0.5,
-      'max_tokens': 2400,
+      // Halved along with the schema: the page is now just a definition and
+      // a handful of sentences.
+      'max_tokens': 1200,
       'chat_template_kwargs': {'enable_thinking': false},
       // NOTE: deliberately does NOT use _systemBase — that prompt forces every
       // verb into its -다 citation form, which is right for a dictionary entry
@@ -669,10 +725,9 @@ class LlmService {
           'content':
               'You are a Korean vocabulary tutor writing a dictionary-style '
                   'study page for a TOPIK I-II learner. '
-                  'CRITICAL: every explanation you write — the definition, the '
-                  'usage note, the note on each related word, and the note on '
-                  'each example sentence — MUST be written IN KOREAN (한국어), '
-                  'never in English. Use simple, clear TOPIK I-II Korean in '
+                  'CRITICAL: the definition you write MUST be written IN '
+                  'KOREAN (한국어), never in English. Use simple, clear '
+                  'TOPIK I-II Korean in '
                   '해요체, short sentences, no rare vocabulary. The ONLY '
                   'English in your answer is the "english" field of each '
                   'example, which is a plain translation of that sentence. '
@@ -685,22 +740,15 @@ class LlmService {
                   'Romanization ("bap", "hakgyo"), never McCune-Reischauer. '
                   'Reply with ONLY a single JSON object, no prose and no code '
                   'fences, of exactly this shape: '
-                  '{"definitionKo":"...","nuanceKo":"...",'
-                  '"related":[{"word":"...","noteKo":"..."}],'
+                  '{"definitionKo":"...",'
                   '"examples":[{"korean":"...","romanization":"...",'
-                  '"english":"...","explanationKo":"..."}]}. '
+                  '"english":"..."}]}. '
                   '"definitionKo" is the meaning of the word explained in '
                   'Korean (1-2 sentences, like a 국어사전 뜻풀이). '
-                  '"nuanceKo" explains in Korean when and how the word is '
-                  'used — register, common partner words, typical particles, '
-                  'and any mistake learners make (2-4 sentences). '
-                  '"related" lists 2-4 related words (유의어, 반의어 or words '
-                  'often used together); "noteKo" says in Korean how each one '
-                  'relates to the target word. '
                   '"examples" contains exactly $exampleCount sentences of '
-                  'increasing length; "explanationKo" explains that specific '
-                  'sentence in Korean — what it means and which grammar or '
-                  'particle is at work (1-2 sentences). '
+                  'increasing length. '
+                  'Output NOTHING else — no usage notes, no related words, '
+                  'no per-sentence commentary. '
                   'Write every JSON string on a single line: never put a raw '
                   'newline inside a string value.',
         },

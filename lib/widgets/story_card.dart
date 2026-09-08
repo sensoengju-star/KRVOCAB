@@ -5,6 +5,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../providers/tts_settings_provider.dart';
 import '../services/narration_service.dart';
 import '../theme/app_colors.dart';
+import 'gold_button.dart';
 
 /// A short Korean story that weaves in several vocabulary words.
 class VocabStory {
@@ -60,6 +61,17 @@ class VocabStory {
   }
 
   bool get isRenderable => korean.trim().isNotEmpty;
+
+  Map<String, dynamic> toJson() => {
+        'title': title,
+        'korean': korean,
+        'romanization': romanization,
+        'english': english,
+        'words_used': wordsUsed,
+        'used': [
+          for (final u in usedForms) {'form': u.form, 'word': u.word},
+        ],
+      };
 }
 
 class StoryCard extends ConsumerStatefulWidget {
@@ -68,6 +80,11 @@ class StoryCard extends ConsumerStatefulWidget {
     required this.story,
     required this.targets,
     this.glossary = const {},
+    this.savedAt,
+    this.onDelete,
+    this.narrated = false,
+    this.read = false,
+    this.onToggleRead,
   });
 
   final VocabStory story;
@@ -80,6 +97,23 @@ class StoryCard extends ConsumerStatefulWidget {
   /// over a highlighted word.
   final Map<String, String> glossary;
 
+  /// When this story was written, for stories loaded from the library.
+  /// Null while a batch is still streaming in.
+  final DateTime? savedAt;
+
+  /// Removes this story from the library. Null for an unsaved batch, and
+  /// refused by the card itself until the story has been heard and read.
+  final VoidCallback? onDelete;
+
+  /// Every sentence has been played at least once.
+  final bool narrated;
+
+  /// Ticked off by the learner.
+  final bool read;
+
+  /// Toggles [read]. Null for an unsaved batch.
+  final VoidCallback? onToggleRead;
+
   @override
   ConsumerState<StoryCard> createState() => _StoryCardState();
 }
@@ -87,8 +121,7 @@ class StoryCard extends ConsumerStatefulWidget {
 class _StoryCardState extends ConsumerState<StoryCard> {
   bool _showEnglish = false;
 
-  /// Identifies this card to the shared narration player. Derived from the
-  /// text itself — stories are generated, not stored, so they have no id.
+  /// Identifies this card to the shared narration player.
   String get _storyId =>
       '${widget.story.title}#${widget.story.korean.hashCode}';
 
@@ -125,7 +158,21 @@ class _StoryCardState extends ConsumerState<StoryCard> {
                 )
               else
                 const Spacer(),
+              if (widget.savedAt != null)
+                Padding(
+                  padding: const EdgeInsets.only(right: 4),
+                  child: Text(
+                    _formatSaved(widget.savedAt!),
+                    style: GoogleFonts.inter(
+                      color: AppColors.mutedInk(context),
+                      fontSize: 10.5,
+                    ),
+                  ),
+                ),
+              _modeToggle(),
               _narrateButton(),
+              if (widget.onToggleRead != null) _readButton(),
+              if (widget.onDelete != null) _deleteButton(),
             ],
           ),
           const SizedBox(height: 10),
@@ -162,6 +209,97 @@ class _StoryCardState extends ConsumerState<StoryCard> {
     );
   }
 
+  /// Marks the story read. Only offered once it has been heard in full —
+  /// ticking "read" on something you never listened to would make the delete
+  /// gate meaningless.
+  Widget _readButton() {
+    final unlocked = widget.narrated;
+    return Tooltip(
+      message: !unlocked
+          ? '전체를 들은 뒤에 표시할 수 있어요'
+          : (widget.read ? '읽음 표시 취소' : '읽음 표시'),
+      child: TonalIconButton(
+        icon: widget.read ? Icons.task_alt : Icons.radio_button_unchecked,
+        tooltip: widget.read ? '읽음' : '읽음 표시',
+        size: 17,
+        color: widget.read
+            ? AppColors.softGreen
+            : (unlocked
+                ? AppColors.mutedInk(context)
+                : AppColors.mutedInk(context).withValues(alpha: 0.35)),
+        onPressed: unlocked ? widget.onToggleRead : null,
+      ),
+    );
+  }
+
+  /// Deleting needs the story heard in full AND marked read. The button
+  /// stays visible but inert until then, and says which step is missing.
+  Widget _deleteButton() {
+    final canDelete = widget.narrated && widget.read;
+    return Tooltip(
+      message: canDelete
+          ? '이야기 삭제'
+          : (!widget.narrated
+              ? 'Listen to the whole story first'
+              : 'Mark it read first'),
+      child: TonalIconButton(
+        icon: canDelete ? Icons.close : Icons.lock_outline,
+        tooltip: canDelete ? '이야기 삭제' : '아직 삭제할 수 없어요',
+        size: 16,
+        color: canDelete
+            ? AppColors.softRed
+            : AppColors.mutedInk(context).withValues(alpha: 0.35),
+        onPressed: canDelete ? widget.onDelete : null,
+      ),
+    );
+  }
+
+  /// Switches between reading the story straight through and stopping after
+  /// each sentence.
+  Widget _modeToggle() {
+    final mode = ref.watch(narrationModeProvider);
+    final stepping = mode == NarrationMode.sentence;
+    return Tooltip(
+      message: stepping
+          ? '한 문장씩 — tap for whole story'
+          : '전체 재생 — tap for one sentence at a time',
+      child: Material(
+        color: stepping ? AppColors.goldTint(context) : Colors.transparent,
+        borderRadius: BorderRadius.circular(AppRadius.xs),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(AppRadius.xs),
+          onTap: () => ref.read(narrationModeProvider.notifier).toggle(),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  stepping ? Icons.short_text : Icons.notes,
+                  size: 16,
+                  color: stepping
+                      ? AppColors.deepGold
+                      : AppColors.mutedInk(context),
+                ),
+                const SizedBox(width: 5),
+                Text(
+                  stepping ? '한 문장' : '전체',
+                  style: GoogleFonts.notoSerifKr(
+                    color: stepping
+                        ? AppColors.deepGold
+                        : AppColors.mutedInk(context),
+                    fontSize: 11,
+                    fontWeight: stepping ? FontWeight.w700 : FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   /// Play / pause for the whole story.
   Widget _narrateButton() {
     final controller = ref.read(narrationProvider);
@@ -182,18 +320,20 @@ class _StoryCardState extends ConsumerState<StoryCard> {
             child: InkWell(
               customBorder: const CircleBorder(),
               onTap: () {
-                // Source is applied per play so a Settings change takes
-                // effect on the next press without restarting the app.
-                controller.source = ref.read(narrationSourceProvider);
                 if (playing) {
                   controller.pause();
-                } else {
-                  controller.play(
-                    _storyId,
-                    _sentences,
-                    from: active ? st.index : 0,
-                  );
+                  return;
                 }
+                final mode = ref.read(narrationModeProvider);
+                // Stepping holds on the line just read, so the next press
+                // continues with the one after it. Whole-story playback
+                // resumes from wherever it was paused.
+                final from = !active
+                    ? 0
+                    : (mode == NarrationMode.sentence
+                        ? st.index + 1
+                        : st.index);
+                controller.play(_storyId, _sentences, from: from, mode: mode);
               },
               child: Padding(
                 padding: const EdgeInsets.all(8),
@@ -241,10 +381,12 @@ class _StoryCardState extends ConsumerState<StoryCard> {
             for (var i = 0; i < sentences.length; i++)
               _SentenceLine(
                 highlighted: active && st.index == i,
-                onTap: () {
-                  controller.source = ref.read(narrationSourceProvider);
-                  controller.play(_storyId, sentences, from: i);
-                },
+                onTap: () => controller.play(
+                  _storyId,
+                  sentences,
+                  from: i,
+                  mode: ref.read(narrationModeProvider),
+                ),
                 child: _buildKoreanHighlighted(context, sentences[i]),
               ),
             if (active && st.error != null) ...[
@@ -362,9 +504,6 @@ class _StoryCardState extends ConsumerState<StoryCard> {
     final hlStyle = base.copyWith(
       color: AppColors.deepGold,
       fontWeight: FontWeight.w700,
-      decoration: TextDecoration.underline,
-      decorationColor: AppColors.antiqueGold,
-      decorationThickness: 2.2,
     );
 
     final spans = <InlineSpan>[];
@@ -463,4 +602,18 @@ class _SentenceLine extends StatelessWidget {
       ),
     );
   }
+}
+
+/// "today" / "yesterday" / a plain date — enough to place a story without
+/// turning the header into a timestamp.
+String _formatSaved(DateTime when) {
+  final now = DateTime.now();
+  final day = DateTime(when.year, when.month, when.day);
+  final today = DateTime(now.year, now.month, now.day);
+  final diff = today.difference(day).inDays;
+  if (diff <= 0) return 'today';
+  if (diff == 1) return 'yesterday';
+  if (diff < 7) return '$diff days ago';
+  String two(int n) => n.toString().padLeft(2, '0');
+  return '${when.year}-${two(when.month)}-${two(when.day)}';
 }

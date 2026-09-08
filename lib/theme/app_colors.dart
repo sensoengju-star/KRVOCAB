@@ -45,7 +45,7 @@ class AppColors {
   // fighting it. Used for status, part of speech and section accents so the
   // UI carries information in colour instead of in more text.
   static const Color jade = Color(0xFF4F8F7B); // 청 — verbs
-  static const Color sky = Color(0xFF4A87A4); // 청 (light) — learning
+  static const Color sky = Color(0xFF4A87A4); // 청 (light)
   static const Color indigo = Color(0xFF48619A); // 감청 — nouns
   static const Color plum = Color(0xFF8B4A6B); // 자주 — descriptive verbs
   static const Color clay = Color(0xFFB0794A); // 황토 — particles
@@ -150,9 +150,11 @@ class AppColors {
           BoxShadow(color: Color(0x0A2C2825), blurRadius: 3, offset: Offset(0, 1)),
         ];
 
-  /// Status colours. A word is either being learned or being reinforced —
-  /// both carry a colour, so neither reads as an absence.
-  static const Color statusLearning = sky;
+  /// Status colours. Both are gold: learning and reinforced are two stages of
+  /// the same collection, not two different things, and giving them separate
+  /// hues made the combined list read as two lists pushed together. The
+  /// status pill and the cycle icon still name which stage a word is in.
+  static const Color statusLearning = deepGold;
   static const Color statusReinforcement = deepGold;
 
   /// A tinted well in [c]'s hue — the standard treatment for coloured chips.

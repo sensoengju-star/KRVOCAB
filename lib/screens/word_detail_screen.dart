@@ -15,8 +15,8 @@ import '../theme/app_colors.dart';
 import '../widgets/gold_button.dart';
 import '../widgets/mugunghwa_spinner.dart';
 
-/// Dedicated page for one vocabulary word — 뜻풀이, 쓰임, 관련 어휘 and 예문,
-/// all explained in Korean. Reached by tapping a word in the Vocabulary list.
+/// Dedicated page for one vocabulary word — its 뜻풀이 in Korean and a few
+/// 예문. Reached by tapping a word in the Vocabulary list.
 ///
 /// The page is generated once by the local model and then cached in Hive, so
 /// coming back to a word is instant and works with the server offline.
@@ -138,22 +138,12 @@ class _WordDetailScreenState extends ConsumerState<WordDetailScreen> {
       if (d.definitionKo.isNotEmpty) {
         buf..writeln()..writeln('[뜻풀이]')..writeln(d.definitionKo);
       }
-      if (d.nuanceKo.isNotEmpty) {
-        buf..writeln()..writeln('[쓰임 · 뉘앙스]')..writeln(d.nuanceKo);
-      }
-      if (d.related.isNotEmpty) {
-        buf..writeln()..writeln('[관련 어휘]');
-        for (final r in d.related) {
-          buf.writeln('· ${r.word} — ${r.noteKo}');
-        }
-      }
       if (d.examples.isNotEmpty) {
         buf..writeln()..writeln('[예문]');
         for (var i = 0; i < d.examples.length; i++) {
           final e = d.examples[i];
           buf.writeln('${i + 1}. ${e.korean}');
           if (e.english.isNotEmpty) buf.writeln('   ${e.english}');
-          if (e.explanationKo.isNotEmpty) buf.writeln('   ${e.explanationKo}');
         }
       }
     }
@@ -282,24 +272,6 @@ class _WordDetailScreenState extends ConsumerState<WordDetailScreen> {
               _DefinitionCard(text: d.definitionKo),
               const SizedBox(height: 24),
             ],
-            if (d.nuanceKo.isNotEmpty) ...[
-              const _SectionLabel(
-                korean: '쓰임 · 뉘앙스',
-                english: 'How it is used',
-                color: AppColors.jade,
-              ),
-              _ProseCard(text: d.nuanceKo),
-              const SizedBox(height: 16),
-            ],
-            if (d.related.isNotEmpty) ...[
-              const _SectionLabel(
-                korean: '관련 어휘',
-                english: 'Related vocabulary',
-                color: AppColors.indigo,
-              ),
-              for (final r in d.related) _RelatedRow(related: r),
-              const SizedBox(height: 16),
-            ],
             if (d.examples.isNotEmpty) ...[
               _SectionLabel(
                 korean: '예문',
@@ -307,7 +279,7 @@ class _WordDetailScreenState extends ConsumerState<WordDetailScreen> {
                 color: AppColors.plum,
               ),
               for (final e in d.examples)
-                _DetailExampleCard(example: e, target: word.hangul),
+                _DetailExampleCard(example: e),
             ],
             const SizedBox(height: 20),
             Center(
@@ -385,8 +357,10 @@ class _WordHeaderCard extends StatelessWidget {
                       onTap: () => TtsService.instance.speak(word.hangul),
                       child: Text(
                         word.hangul,
+                        // Matches the vocabulary list: the headword is neutral
+                        // white, and the gold is left to everything around it.
                         style: GoogleFonts.notoSerifKr(
-                          color: AppColors.lightGold,
+                          color: Colors.white,
                           fontSize: 40,
                           fontWeight: FontWeight.w600,
                           height: 1.2,
@@ -746,85 +720,11 @@ class _DefinitionCard extends StatelessWidget {
   }
 }
 
-/// A block of supporting Korean prose (the usage note). Flat and quiet by
-/// design — the lift is reserved for [_DefinitionCard].
-class _ProseCard extends StatelessWidget {
-  const _ProseCard({required this.text});
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: AppColors.surface(context),
-        borderRadius: BorderRadius.circular(AppRadius.md),
-        border: Border.all(color: AppColors.hairline(context)),
-      ),
-      child: Text(
-        text,
-        style: GoogleFonts.notoSerifKr(
-          color: AppColors.ink(context),
-          fontSize: 15,
-          height: 1.65,
-        ),
-      ),
-    );
-  }
-}
-
-class _RelatedRow extends StatelessWidget {
-  const _RelatedRow({required this.related});
-  final RelatedWord related;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        color: AppColors.inset(context),
-        borderRadius: BorderRadius.circular(AppRadius.sm),
-        border: Border.all(color: AppColors.hairline(context)),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            related.word,
-            style: GoogleFonts.notoSerifKr(
-              color: AppColors.deepGold,
-              fontSize: 17,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          if (related.noteKo.isNotEmpty) ...[
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                related.noteKo,
-                style: GoogleFonts.notoSerifKr(
-                  color: AppColors.ink(context),
-                  fontSize: 14,
-                  height: 1.5,
-                ),
-              ),
-            ),
-          ] else
-            const Spacer(),
-        ],
-      ),
-    );
-  }
-}
-
-/// One example sentence: Korean (target word underlined), romanization,
-/// English gloss, and the Korean explanation of the sentence.
+/// One example sentence: Korean, romanization and an English gloss kept
+/// behind a toggle.
 class _DetailExampleCard extends StatefulWidget {
-  const _DetailExampleCard({required this.example, required this.target});
+  const _DetailExampleCard({required this.example});
   final DetailExample example;
-  final String target;
 
   @override
   State<_DetailExampleCard> createState() => _DetailExampleCardState();
@@ -836,7 +736,6 @@ class _DetailExampleCardState extends State<_DetailExampleCard> {
   bool _showEnglish = false;
 
   DetailExample get example => widget.example;
-  String get target => widget.target;
 
   @override
   Widget build(BuildContext context) {
@@ -903,115 +802,25 @@ class _DetailExampleCardState extends State<_DetailExampleCard> {
               ),
             ),
           ],
-          if (example.explanationKo.isNotEmpty) ...[
-            const SizedBox(height: 14),
-            Container(
-              width: double.infinity,
-              decoration: BoxDecoration(
-                color: AppColors.champagne.withValues(alpha: 0.28),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              // A left gold stripe as a sibling rather than a Border side —
-              // a non-uniform Border and a borderRadius can't coexist in one
-              // BoxDecoration.
-              child: IntrinsicHeight(
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Container(
-                      width: 3,
-                      decoration: const BoxDecoration(
-                        color: AppColors.antiqueGold,
-                        borderRadius: BorderRadius.horizontal(
-                          left: Radius.circular(12),
-                        ),
-                      ),
-                    ),
-                    Expanded(
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              '설명',
-                              style: GoogleFonts.inter(
-                                color: AppColors.deepGold,
-                                fontSize: 10,
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: 1.4,
-                              ),
-                            ),
-                            const SizedBox(height: 6),
-                            Text(
-                              example.explanationKo,
-                              style: GoogleFonts.notoSerifKr(
-                                color: AppColors.ink(context),
-                                fontSize: 14,
-                                height: 1.6,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
         ],
       ),
     );
   }
 
   Widget _koreanWithHighlight(BuildContext context) {
-    final base = GoogleFonts.notoSerifKr(
-      color: AppColors.ink(context),
-      fontSize: 19,
-      height: 1.5,
-      fontWeight: FontWeight.w500,
+    // Plain text: the target word is the whole point of the page, so marking
+    // every occurrence of it added noise rather than information.
+    return Text(
+      example.korean,
+      style: GoogleFonts.notoSerifKr(
+        color: AppColors.ink(context),
+        fontSize: 19,
+        height: 1.5,
+        fontWeight: FontWeight.w500,
+      ),
     );
-
-    // Try the word as written; a conjugated verb (가다 → 가요) only shares its
-    // stem, so fall back to that before giving up on the underline.
-    final needle = _needle();
-    if (needle == null) return Text(example.korean, style: base);
-
-    final spans = <TextSpan>[];
-    var rest = example.korean;
-    while (rest.isNotEmpty) {
-      final idx = rest.indexOf(needle);
-      if (idx == -1) {
-        spans.add(TextSpan(text: rest));
-        break;
-      }
-      if (idx > 0) spans.add(TextSpan(text: rest.substring(0, idx)));
-      spans.add(TextSpan(
-        text: needle,
-        style: const TextStyle(
-          decoration: TextDecoration.underline,
-          decorationColor: AppColors.antiqueGold,
-          decorationThickness: 2.2,
-          color: AppColors.deepGold,
-        ),
-      ));
-      rest = rest.substring(idx + needle.length);
-    }
-    return RichText(text: TextSpan(style: base, children: spans));
   }
 
-  String? _needle() {
-    final t = target.trim();
-    if (t.isEmpty) return null;
-    if (example.korean.contains(t)) return t;
-    // Dictionary-form verb/adjective: drop the trailing 다 and match the stem.
-    if (t.length > 2 && t.endsWith('다')) {
-      final stem = t.substring(0, t.length - 1);
-      if (example.korean.contains(stem)) return stem;
-    }
-    return null;
-  }
 }
 
 /// "번역 보기 / 번역 숨기기" — the control that reveals an English line.

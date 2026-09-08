@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/vocab_word.dart';
 import 'review_settings_provider.dart';
 import 'vocab_provider.dart';
+import 'word_set_provider.dart';
 
 class ReviewState {
   ReviewState({
@@ -14,6 +15,7 @@ class ReviewState {
     required this.correctThisSession,
     required this.totalThisSession,
     required this.revealed,
+    this.answered = const {},
   });
 
   final List<VocabWord> deck;
@@ -23,7 +25,18 @@ class ReviewState {
   final int totalThisSession;
   final bool revealed;
 
+  /// Ids answered since the deck was built — either way, right or wrong.
+  /// Kept across the lap boundary on purpose: it's what says "you have been
+  /// through all of these", and that stays true on the second lap.
+  final Set<String> answered;
+
   VocabWord? get current => deck.isEmpty ? null : deck[index % deck.length];
+
+  /// Every card in the deck has been answered at least once. This is what
+  /// unlocks setting the batch aside — you can't file away a review you
+  /// haven't finished.
+  bool get lapComplete =>
+      deck.isNotEmpty && answered.length >= deck.length;
 
   double get progress {
     if (totalThisSession == 0) return 0;
@@ -37,6 +50,7 @@ class ReviewState {
     int? correctThisSession,
     int? totalThisSession,
     bool? revealed,
+    Set<String>? answered,
   }) {
     return ReviewState(
       deck: deck ?? this.deck,
@@ -45,6 +59,7 @@ class ReviewState {
       correctThisSession: correctThisSession ?? this.correctThisSession,
       totalThisSession: totalThisSession ?? this.totalThisSession,
       revealed: revealed ?? this.revealed,
+      answered: answered ?? this.answered,
     );
   }
 
@@ -68,6 +83,11 @@ class ReviewNotifier extends StateNotifier<ReviewState> {
     // Per-card stats updates (correctCount/incorrectCount) flow through the
     // same provider but must NOT reshuffle the deck mid-session, otherwise
     // every answer resets the order and the user sees duplicates.
+    // Setting a batch aside (or switching one back on) changes who is in the
+    // deck, so it rebuilds exactly like an add or a delete would.
+    _ref.listen<Set<String>>(setAsideIdsProvider, (_, __) {
+      recomputeEligibility();
+    });
     _ref.listen<List<VocabWord>>(vocabProvider, (_, next) {
       final nextIds = _eligibleIds(next);
       if (nextIds.length != _knownIds.length ||
@@ -96,12 +116,14 @@ class ReviewNotifier extends StateNotifier<ReviewState> {
   Set<String> _eligibleIds(List<VocabWord> words) {
     final includeReinforcement = _ref.read(includeReinforcementProvider);
     final learningOnly = _ref.read(learningOnlyProvider);
+    final setAside = _ref.read(setAsideIdsProvider);
     final reinforcementIds = (includeReinforcement && !learningOnly)
         ? _reinforcementGroupIds(words)
         : const <String>{};
     return {
       for (final w in words)
-        if (_isEligible(w, includeReinforcement, learningOnly, reinforcementIds))
+        if (_isEligible(
+            w, includeReinforcement, learningOnly, reinforcementIds, setAside))
           w.id,
     };
   }
@@ -124,6 +146,7 @@ class ReviewNotifier extends StateNotifier<ReviewState> {
   }
 
   /// Eligibility rules:
+  ///   - a word in a set that is put aside never passes, whatever else is on.
   ///   - `learningOnly` wins: when on, ONLY learning words pass.
   ///   - reinforcement passes only when "Include reinforced words" is on AND
   ///     the word is in the currently-selected reinforcement group.
@@ -134,7 +157,9 @@ class ReviewNotifier extends StateNotifier<ReviewState> {
     bool includeReinforcement,
     bool learningOnly,
     Set<String> reinforcementIds,
+    Set<String> setAside,
   ) {
+    if (setAside.contains(w.id)) return false;
     final reinforced = w.status == WordStatus.reinforcement;
     if (learningOnly) return !reinforced;
     if (!reinforced) return true;
@@ -179,12 +204,14 @@ class ReviewNotifier extends StateNotifier<ReviewState> {
     // card per word in review. Keep the entry with the most attempts so
     // stats aren't reset.
     final learningOnly = _ref.read(learningOnlyProvider);
+    final setAside = _ref.read(setAsideIdsProvider);
     final reinforcementIds = (includeReinforcement && !learningOnly)
         ? _reinforcementGroupIds(source)
         : const <String>{};
     final seen = <String, VocabWord>{};
     for (final w in source) {
-      if (!_isEligible(w, includeReinforcement, learningOnly, reinforcementIds)) {
+      if (!_isEligible(w, includeReinforcement, learningOnly, reinforcementIds,
+          setAside)) {
         continue;
       }
       final key = w.hangul.trim().toLowerCase();
@@ -203,7 +230,7 @@ class ReviewNotifier extends StateNotifier<ReviewState> {
       state = ReviewState.empty;
       return;
     }
-    final shuffled = _shuffleAvoiding(pool, state.current);
+    final shuffled = _reorderAvoiding(pool, state.current);
     state = ReviewState(
       deck: shuffled,
       index: 0,
@@ -212,6 +239,21 @@ class ReviewNotifier extends StateNotifier<ReviewState> {
       totalThisSession: pool.length,
       revealed: false,
     );
+  }
+
+  /// Shuffles [pool] and then guarantees the result does not START with
+  /// [avoid] — the card the user is leaving.
+  ///
+  /// [_shuffleAvoiding] is best-effort: on a small deck every swap candidate
+  /// can itself be in the avoid set, and it gives up rather than swapping.
+  /// That's what put the same card back on screen immediately, looking like
+  /// the deck had advanced to an identical copy. Rotating by one is always
+  /// available whenever there's more than one card.
+  List<VocabWord> _reorderAvoiding(List<VocabWord> pool, VocabWord? avoid) {
+    final ordered = _shuffleAvoiding(pool, avoid);
+    if (avoid == null || ordered.length < 2) return ordered;
+    if (ordered.first.id != avoid.id) return ordered;
+    return [...ordered.skip(1), ordered.first];
   }
 
   /// Fisher-Yates shuffle that then pushes any recently-seen card out of
@@ -229,7 +271,9 @@ class ReviewNotifier extends StateNotifier<ReviewState> {
       list[j] = tmp;
     }
 
-    if (list.length < 3) return list;
+    // A two-card deck still needs the avoid pass below: without it, wrapping
+    // from [A, B] straight back to [B, A] shows B twice in a row.
+    if (list.length < 2) return list;
 
     // Window scales with deck size — for a 5-card deck we avoid 2; for 10+
     // we avoid up to 4. Never block more than half the deck or the swap
@@ -274,6 +318,7 @@ class ReviewNotifier extends StateNotifier<ReviewState> {
     state = state.copyWith(
       streak: state.streak + 1,
       correctThisSession: state.correctThisSession + 1,
+      answered: {...state.answered, cur.id},
     );
   }
 
@@ -281,18 +326,19 @@ class ReviewNotifier extends StateNotifier<ReviewState> {
     final cur = state.current;
     if (cur == null) return;
     _ref.read(vocabProvider.notifier).recordResult(cur.id, correct: false);
-    state = state.copyWith(streak: 0);
+    state = state.copyWith(streak: 0, answered: {...state.answered, cur.id});
     // No advance — caller (next button) decides whether to move on.
   }
 
   void _advance() {
     // Record the card the user just left as "seen" so the next reshuffle
     // pushes it (and the few before it) toward the back.
-    _markSeen(state.current?.id);
+    final left = state.current;
+    _markSeen(left?.id);
     final next = state.index + 1;
     if (next >= state.deck.length) {
       // Auto-reshuffle at end of deck; reset session counters.
-      final reshuffled = _shuffleAvoiding(state.deck, state.current);
+      final reshuffled = _reorderAvoiding(state.deck, left);
       state = state.copyWith(
         deck: reshuffled,
         index: 0,
