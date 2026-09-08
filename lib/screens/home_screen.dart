@@ -5,6 +5,7 @@ import 'package:google_fonts/google_fonts.dart';
 
 import '../providers/vocab_provider.dart';
 import '../theme/app_colors.dart';
+import '../widgets/data_safety_sheet.dart';
 import 'blocks_screen.dart';
 import 'examples_screen.dart';
 import 'grammar_screen.dart';
@@ -115,6 +116,15 @@ class HomeScreen extends ConsumerWidget {
             ),
           ),
           actions: [
+            // Next to Settings, and deliberately not inside it: the one
+            // question this answers — "will I lose my words?" — is asked
+            // before anyone goes looking through preferences.
+            _CircleAction(
+              icon: Icons.shield_outlined,
+              tooltip: '데이터 안전',
+              onTap: () => DataSafetySheet.show(context),
+            ),
+            const SizedBox(width: 8),
             Padding(
               padding: const EdgeInsets.only(right: 14),
               child: _CircleAction(
