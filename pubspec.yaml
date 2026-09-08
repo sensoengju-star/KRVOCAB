@@ -22,9 +22,18 @@ dependencies:
   crypto: ^3.0.3
   google_fonts: ^6.2.1
   cupertino_icons: ^1.0.6
+  window_manager: ^0.5.2
+  tray_manager: ^0.5.3
+  launch_at_startup: ^0.5.1
 
 dev_dependencies:
   flutter_lints: ^4.0.0
 
 flutter:
   uses-material-design: true
+
+  assets:
+    # The tray icon. Bundled rather than read from windows/runner/resources,
+    # because that path is relative to the working directory and only exists
+    # in a dev checkout.
+    - assets/tray_icon.ico

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -134,11 +135,89 @@ class InboxService {
     }
   }
 
+  StreamSubscription<FileSystemEvent>? _watch;
+  Timer? _watchDebounce;
+
+  /// Watches the inbox folder and imports as soon as something lands in it.
+  ///
+  /// iCloud offers no way to tell an app that a file arrived, but it does not
+  /// need to: it writes a real file, and Windows reports that. So the wait for
+  /// a captured word drops from "up to the poll interval" to about a second,
+  /// and the timer becomes a safety net rather than the mechanism.
+  ///
+  /// Re-armed on failure because a watch dies with its directory — and the
+  /// folder living in a sync client's tree makes that a real possibility.
+  Future<void> armWatch(Future<void> Function() onChange) async {
+    await _watch?.cancel();
+    _watch = null;
+
+    final path = await folder();
+    if (path == null) return;
+    final root = Directory(path);
+    if (!root.existsSync()) return;
+
+    try {
+      _watch = root
+          .watch(events: FileSystemEvent.all, recursive: true)
+          .listen((event) {
+        if (_isOurOwnDoing(event.path)) return;
+        // A sync client writes a file in pieces, and may announce it before
+        // the contents are down. Waiting a moment means the import reads a
+        // whole file rather than rejecting a half-written one.
+        _watchDebounce?.cancel();
+        _watchDebounce = Timer(const Duration(seconds: 3), () async {
+          await onChange();
+        });
+      }, onError: (Object e) {
+        debugPrint('[InboxService] watch failed: $e');
+      });
+    } catch (e) {
+      debugPrint('[InboxService] could not watch $path: $e');
+    }
+  }
+
+  /// True for paths this app writes itself. Without this the watcher would
+  /// see its own archiving and exporting and import again, forever.
+  bool _isOurOwnDoing(String path) {
+    final p = path.toLowerCase();
+    final sep = Platform.pathSeparator;
+    return p.contains('${sep}processed$sep') ||
+        p.contains('${sep}export$sep') ||
+        p.endsWith('.part') ||
+        p.endsWith('readme.md');
+  }
+
+  Future<void> disposeWatch() async {
+    _watchDebounce?.cancel();
+    await _watch?.cancel();
+    _watch = null;
+  }
+
+  /// An import already under way. Everything else waits for it.
+  Future<InboxResult>? _inFlight;
+
   /// Reads every file in the inbox and adds the words it doesn't already
   /// have, asking the cloud model for anything the file didn't carry. Safe to
   /// call as often as you like — importing the same file twice adds nothing,
   /// and neither does a word already in the collection.
-  Future<InboxResult> importNow() async {
+  ///
+  /// Never runs twice at once. The duplicate check is a snapshot taken at the
+  /// start, so two overlapping runs would each see the same word as new and
+  /// each add it — which is exactly how two captured words became four. There
+  /// are five things that can trigger an import (launch, the ten-second
+  /// sweep, window focus, the header button, the tray timer) and a run takes
+  /// seconds while it waits on the model, so overlapping is not a rare case.
+  /// A caller arriving mid-run gets the running import's result rather than
+  /// starting a second one.
+  Future<InboxResult> importNow() {
+    final running = _inFlight;
+    if (running != null) return running;
+    final started = _import().whenComplete(() => _inFlight = null);
+    _inFlight = started;
+    return started;
+  }
+
+  Future<InboxResult> _import() async {
     final path = await folder();
     if (path == null) {
       return const InboxResult(configured: false);

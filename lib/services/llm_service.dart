@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/vocab_word.dart';
 import '../models/word_detail.dart';
+import 'llm_launcher.dart';
 
 class LlmException implements Exception {
   LlmException(this.message);
@@ -22,12 +23,22 @@ class LlmConfig {
   static const defaultEndpoint = 'http://127.0.0.1:8080/v1/chat/completions';
   static const defaultModelAlias = 'maldari-gemma';
 
+  /// Every request path goes through here, which makes it the one place the
+  /// model server has to be running by.
+  ///
+  /// It is started on demand rather than at launch: the app lives in the tray
+  /// now, and starting a model server for someone who opened the window to
+  /// add a single word would keep gigabytes resident all day. The first
+  /// request pays the load time; the rest find it warm, and hiding the window
+  /// lets it go again.
   static Future<LlmConfig> load() async {
     final p = await SharedPreferences.getInstance();
-    return LlmConfig(
+    final config = LlmConfig(
       endpoint: p.getString('llm_endpoint') ?? defaultEndpoint,
       modelAlias: p.getString('llm_model_alias') ?? defaultModelAlias,
     );
+    await LlmLauncher.instance.ensureRunning();
+    return config;
   }
 
   static Future<void> save({String? endpoint, String? modelAlias}) async {

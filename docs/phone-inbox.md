@@ -52,7 +52,7 @@ empty folder to lose.
 
 ### Build the Shortcut
 
-Open **Shortcuts** → **+** → **Add Action**. Two actions.
+Open **Shortcuts** → **+** → **Add Action**. Three actions.
 
 > **Add them in this order.** Shortcuts only offers a variable to actions
 > *below* the one that produces it. Add Save File first and there is no
@@ -88,6 +88,21 @@ a **›** in a blue circle. Both matter:
   - leave **Overwrite If File Exists** **off**, so capturing twice before you
     open Maldari appends a numbered file instead of replacing the first.
 
+**Action 3 — search for `Open App`, and choose `Files`**
+
+This one looks pointless and is not. iOS defers iCloud Drive uploads written
+by a background app: the Shortcut saves your word to the device immediately,
+but the upload waits until the Files provider next gets foreground time. Left
+alone, that can be minutes — and the word simply does not exist on the PC
+until it happens.
+
+Opening Files for a moment is what releases it. Swipe back and carry on; the
+upload continues.
+
+> Symptom without it: the capture seems to work, the file is nowhere on the
+> PC, and it appears "eventually" — usually the next time you happen to open
+> Files for your own reasons.
+
 Tap the shortcut's name at the top — it will have auto-named itself after one
 of the actions — rename it **Korean words**, and choose **Add to Home Screen**.
 
@@ -110,6 +125,13 @@ Choosing the pile is then which icon you tap — nothing to set, nothing to
 remember, and no race with the setting.
 
 That's the whole thing. No JSON, no API key, no headers.
+
+### How long it takes
+
+Seconds to a minute, most of it iCloud. The app checks the folder every 30
+seconds and also watches it, so it reacts within seconds of a file landing on
+the PC — but nothing on the PC can act on a file the phone has not uploaded
+yet, which is why Action 3 matters more than it looks.
 
 ### Using it
 

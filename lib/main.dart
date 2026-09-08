@@ -1,23 +1,43 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:window_manager/window_manager.dart';
 
 import 'providers/theme_provider.dart';
 import 'screens/home_screen.dart';
+import 'screens/locked_screen.dart';
 import 'screens/onboarding_screen.dart';
 import 'services/llm_launcher.dart';
 import 'providers/vocab_provider.dart';
 import 'services/inbox_service.dart';
+import 'services/single_instance.dart';
 import 'services/storage_service.dart';
+import 'services/tray_service.dart';
+import 'services/vocab_export_service.dart';
 import 'services/tts_service.dart';
 import 'theme/app_theme.dart';
 
-Future<void> main() async {
+Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Claim the slot BEFORE storage is touched. A tray app holds the data files
+  // open for as long as it lives, so a second copy would find every box
+  // locked; turning it away here means it never reaches them.
+  final only = await SingleInstance.claim(
+    onSecondLaunch: () => TrayService.instance.show(),
+  );
+  if (!only) {
+    exit(0);
+  }
+
+  _startedHidden = args.contains(TrayService.hiddenFlag);
+
+  await windowManager.ensureInitialized();
   await StorageService.instance.init();
 
   // Front-load the three runtime-fetched fonts in parallel with the rest of
@@ -30,23 +50,99 @@ Future<void> main() async {
     GoogleFonts.notoSerifKr(),
   ]));
 
-  // Autostart the local LLM server on app launch — fire-and-forget so the
-  // UI never blocks on model load. Lighter flags (-ngl 20, -c 2048) keep
-  // laptops responsive. Shutdown is wired through four lifecycle hooks
-  // (onExitRequested / onDetach / didChangeAppLifecycleState / dispose) so
-  // the process always dies with the app.
-  unawaited(LlmLauncher.instance.ensureRunning());
+  // The model server is NOT started here any more. Living in the tray means
+  // launching it at startup would keep a model resident all day for someone
+  // who may only have opened the app to add a word. It starts on demand
+  // instead — see LlmService — and stops when the window hides.
 
   // Probe the platform speech engine for a Korean voice. Fire-and-forget:
   // the first `speak()` awaits init anyway, this just gets the answer ready
   // so Settings can report it without a pause.
   unawaited(TtsService.instance.init());
 
-  runApp(const ProviderScope(child: MaldariApp()));
+  // The return leg: the collection is written into the same synced folder so
+  // the phone can read it. Debounced on box changes, so it tracks the app.
+  VocabExportService.instance.armAutoExport();
+  unawaited(VocabExportService.instance.exportNow());
+
+  _start();
 }
+
+/// Wires the tray to the things only main can reach, then raises it.
+Future<void> _startTray() async {
+  final tray = TrayService.instance;
+
+  // Wire the callbacks unconditionally, even when the tray is switched off.
+  // Turning it on later calls start() from Settings, and a tray whose menu
+  // items did nothing because main had returned early would be worse than no
+  // tray at all.
+  tray.onImport = () async => _backgroundImport();
+  // Hiding is the moment nothing is being looked at: a good time to let the
+  // model server go.
+  tray.onHide = () async => LlmLauncher.instance.stop();
+  tray.onQuit = () async {
+    await StorageService.instance.close();
+    await TtsService.instance.stop();
+    await LlmLauncher.instance.stop();
+    await SingleInstance.release();
+  };
+  // The folder tells us the moment something lands, so the timer above is a
+  // safety net rather than the way words arrive.
+  await InboxService.instance.armWatch(() async {
+    await _backgroundImport();
+    // A file landed, so more may be landing. Let the poll speed up too.
+    await TrayService.instance.quicken();
+  });
+
+  if (await tray.runInTray()) await tray.start();
+
+  // Launched by Windows at login: be present, not intrusive. Hide after the
+  // tray exists, so there is something to restore from.
+  if (_startedHidden) await tray.hide();
+}
+
+/// True when Windows started us at login rather than the user did.
+bool _startedHidden = false;
+
+/// The timed import. Runs with no window on screen, so it says nothing and
+/// leaves its account in the import history instead.
+Future<bool> _backgroundImport() async {
+  if (InboxService.instance.autoImportPaused) return false;
+  final result = await InboxService.instance.importNow();
+  if (!result.changedAnything) return false;
+  _rootContainer?.read(vocabProvider.notifier).refresh();
+  return true;
+}
+
+/// The provider container behind the running app, so a timer firing while the
+/// window is hidden can still refresh what the list will show.
+ProviderContainer? _rootContainer;
 
 /// Lets the inbox report what it picked up, from outside any Scaffold.
 final _messengerKey = GlobalKey<ScaffoldMessengerState>();
+
+/// Starts the app, or the locked-out screen when the data is held elsewhere.
+///
+/// Deliberately a function rather than a branch inside a widget: the retry
+/// button re-runs startup, and this is the one place that decides which of
+/// the two the app is.
+void _start() {
+  if (StorageService.instance.lockedOut) {
+    runApp(MaterialApp(
+      debugShowCheckedModeBanner: false,
+      theme: buildDarkAppTheme(),
+      home: const LockedScreen(onRetry: _start),
+    ));
+    return;
+  }
+  final container = ProviderContainer();
+  _rootContainer = container;
+  runApp(UncontrolledProviderScope(
+    container: container,
+    child: const MaldariApp(),
+  ));
+  unawaited(_startTray());
+}
 
 class MaldariApp extends ConsumerStatefulWidget {
   const MaldariApp({super.key});
