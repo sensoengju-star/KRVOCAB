@@ -22,8 +22,7 @@ class DataSafetySheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final storage = StorageService.instance;
-    final notes = storage.recoveryNotes;
+    final notes = StorageService.instance.recoveryNotes;
 
     return DraggableScrollableSheet(
       initialChildSize: 0.7,
@@ -68,17 +67,17 @@ class DataSafetySheet extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          '데이터 안전',
-                          style: GoogleFonts.notoSerifKr(
+                          'Data safety',
+                          style: GoogleFonts.playfairDisplay(
                             color: AppColors.ink(context),
-                            fontSize: 18,
-                            fontWeight: FontWeight.w700,
+                            fontSize: 19,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
                         const SizedBox(height: 3),
                         Text(
-                          '앱이 갑자기 꺼져도 단어가 사라지지 않는 이유',
-                          style: GoogleFonts.notoSerifKr(
+                          'Why your words survive an abrupt shutdown',
+                          style: GoogleFonts.inter(
                             color: AppColors.mutedInk(context),
                             fontSize: 12,
                             height: 1.4,
@@ -98,60 +97,70 @@ class DataSafetySheet extends StatelessWidget {
                 children: [
                   _StatusCard(notes: notes),
                   const SizedBox(height: 16),
-                  _sectionLabel(context, '저장 방식'),
+                  _sectionLabel(context, 'HOW IT SAVES'),
                   const _Point(
                     icon: Icons.save_outlined,
-                    title: '0.4초마다 자동 저장',
-                    body: '단어를 추가하거나 고치면 0.4초 뒤 디스크에 기록돼요. '
-                        '저장 버튼은 없고, 누를 필요도 없어요. 여러 번 고쳐도 '
-                        '기록은 한 번으로 묶여서 느려지지 않아요.',
+                    title: 'Written to disk within 0.4 seconds',
+                    body: 'Adding or editing a word schedules a write almost '
+                        'immediately. There is no save button and nothing to '
+                        'remember to press. A burst of edits collapses into a '
+                        'single write, so it stays fast.',
                   ),
                   const _Point(
                     icon: Icons.power_settings_new,
-                    title: '종료 경로마다 안전장치',
-                    body: '창을 닫을 때, 엔진이 떨어져 나갈 때, 창이 비활성화될 때 '
-                        '— 각각 따로 저장을 실행해요. 한 가지 방법으로는 모든 '
-                        '종료를 잡을 수 없어서 네 군데에 걸어 뒀어요.',
+                    title: 'Four separate shutdown hooks',
+                    body: 'Closing the window, the engine detaching, the app '
+                        'going inactive, a hot restart — each one runs its own '
+                        'save. No single hook catches every way an app can '
+                        'end, so they are all wired up.',
                   ),
                   const _Point(
                     icon: Icons.laptop_chromebook_outlined,
-                    title: '노트북을 덮어도',
-                    body: '앱이 화면 뒤로 가는 순간에도 저장이 한 번 실행돼요. '
-                        '그다음에 강제 종료돼도 이미 디스크에 있어요.',
+                    title: 'Safe the moment it leaves the screen',
+                    body: 'Anything other than "in the foreground" triggers a '
+                        'save — backgrounding, a closing lid, a shutting-down '
+                        'machine. Whatever kills the app after that arrives '
+                        'too late to cost you anything.',
                   ),
                   const SizedBox(height: 10),
-                  _sectionLabel(context, '망가졌을 때'),
+                  _sectionLabel(context, 'WHEN A FILE IS DAMAGED'),
                   const _Point(
                     icon: Icons.healing_outlined,
-                    title: '켤 때마다 검사하고 스스로 고쳐요',
-                    body: '전원이 끊겨 파일 끝이 잘려도, 시작할 때 잘린 부분만 '
-                        '떼어내고 나머지는 그대로 살려서 엽니다.',
+                    title: 'Checked and repaired at every launch',
+                    body: 'If power was cut mid-write and the file ends in a '
+                        'torn record, startup trims just that tail and opens '
+                        'everything before it intact.',
                   ),
                   const _Point(
                     icon: Icons.inventory_2_outlined,
-                    title: '무슨 일이 있어도 지우지 않아요',
-                    body: '고칠 수 없을 만큼 손상된 파일도 삭제하지 않고 '
-                        '.corrupt-(시각).hive 라는 이름으로 옆에 남겨 둡니다. '
-                        '나중에 손으로 되살릴 수 있어요.',
+                    title: 'Never deleted, whatever the damage',
+                    body: 'A file too damaged to repair is renamed aside as '
+                        '.corrupt-<timestamp>.hive rather than removed, and a '
+                        'fresh one is opened. Your data is still on disk and '
+                        'can be recovered by hand.',
                   ),
                   const _Point(
                     icon: Icons.lock_outline,
-                    title: '파일이 잠겨 있어도 열려요',
-                    body: 'OneDrive 동기화처럼 다른 프로그램이 파일을 붙잡고 '
-                        '있으면, 임시 저장소로 실행해서 원본은 건드리지 않아요.',
+                    title: 'Opens even when the file is locked',
+                    body: 'If something else is holding the file — OneDrive '
+                        'mid-sync is the usual culprit — the app runs on a '
+                        'temporary store instead of forcing its way in. The '
+                        'original is left untouched.',
                   ),
                   const SizedBox(height: 10),
-                  _sectionLabel(context, '보호 범위'),
+                  _sectionLabel(context, 'WHAT IS COVERED'),
                   const _Point(
                     icon: Icons.folder_copy_outlined,
-                    title: '단어만이 아니라 전부',
-                    body: '단어, 이야기, 보관한 세트, 블록, 문법, 단어 페이지 '
-                        '캐시까지 모두 같은 방식으로 저장되고 복구돼요.',
+                    title: 'All of it, not just the words',
+                    body: 'Words, stories, archived sets, blocks, grammar and '
+                        'the cached word pages are all stored and recovered '
+                        'the same way.',
                   ),
                   const SizedBox(height: 14),
                   Text(
-                    '모든 데이터는 이 컴퓨터에만 저장돼요. 서버로 보내지 않습니다.',
-                    style: GoogleFonts.notoSerifKr(
+                    'Everything stays on this machine. None of it is sent to '
+                    'a server.',
+                    style: GoogleFonts.inter(
                       color: AppColors.mutedInk(context),
                       fontSize: 11.5,
                       height: 1.5,
@@ -171,11 +180,11 @@ class DataSafetySheet extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(2, 6, 0, 8),
         child: Text(
           text,
-          style: GoogleFonts.notoSerifKr(
+          style: GoogleFonts.inter(
             color: AppColors.antiqueGold,
-            fontSize: 12,
+            fontSize: 11,
             fontWeight: FontWeight.w700,
-            letterSpacing: 0.6,
+            letterSpacing: 1.1,
           ),
         ),
       );
@@ -216,8 +225,10 @@ class _StatusCard extends StatelessWidget {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  clean ? '이번 실행: 이상 없음' : '이번 실행: 복구가 있었어요',
-                  style: GoogleFonts.notoSerifKr(
+                  clean
+                      ? 'This launch: nothing needed repair'
+                      : 'This launch: something was repaired',
+                  style: GoogleFonts.inter(
                     color: AppColors.ink(context),
                     fontSize: 13.5,
                     fontWeight: FontWeight.w700,
@@ -228,10 +239,10 @@ class _StatusCard extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            '단어 ${_count(() => storage.box.length)}개 · '
-            '이야기 ${_count(() => storage.storiesBox.length)}개 · '
-            '보관 세트 ${_count(() => storage.setsBox.length)}개',
-            style: GoogleFonts.notoSerifKr(
+            '${_count(() => storage.box.length)} words · '
+            '${_count(() => storage.storiesBox.length)} stories · '
+            '${_count(() => storage.setsBox.length)} archived sets',
+            style: GoogleFonts.inter(
               color: AppColors.mutedInk(context),
               fontSize: 12,
             ),
@@ -292,7 +303,7 @@ class _Point extends StatelessWidget {
               children: [
                 Text(
                   title,
-                  style: GoogleFonts.notoSerifKr(
+                  style: GoogleFonts.inter(
                     color: AppColors.ink(context),
                     fontSize: 13.5,
                     fontWeight: FontWeight.w700,
@@ -302,10 +313,10 @@ class _Point extends StatelessWidget {
                 const SizedBox(height: 3),
                 Text(
                   body,
-                  style: GoogleFonts.notoSerifKr(
+                  style: GoogleFonts.inter(
                     color: AppColors.mutedInk(context),
                     fontSize: 12,
-                    height: 1.65,
+                    height: 1.6,
                   ),
                 ),
               ],

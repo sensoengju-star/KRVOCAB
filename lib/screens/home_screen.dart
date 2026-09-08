@@ -121,7 +121,7 @@ class HomeScreen extends ConsumerWidget {
             // before anyone goes looking through preferences.
             _CircleAction(
               icon: Icons.shield_outlined,
-              tooltip: '데이터 안전',
+              tooltip: 'Data safety',
               onTap: () => DataSafetySheet.show(context),
             ),
             const SizedBox(width: 8),
