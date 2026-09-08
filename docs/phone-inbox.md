@@ -1,183 +1,128 @@
 # Capturing words on your iPhone
 
-Note a word on the phone, let Claude write the definition, and have Maldari
-pick it up the next time you open it.
+Type words on your phone, save them to Google Drive, and Maldari picks them up
+with full definitions the next time you look at it.
 
 ```
-iPhone Shortcut  →  Claude (definitions)  →  JSON file in Google Drive  →  Maldari imports it
+iPhone: type words → save file  →  Google Drive  →  Maldari: reads it, asks Claude, files the words
 ```
 
-Maldari never talks to a cloud service. Google Drive for desktop puts the file
-on this PC, and the app just reads a folder. No account, no OAuth, no API key
-on the desktop — the key lives only in the Shortcut on your phone.
+The phone does nothing but write a list. Everything else happens in the app.
 
 ---
 
-## 1 · One-time setup
+## Part 1 · On this PC (once)
 
-**On this PC** — install [Google Drive for desktop](https://www.google.com/drive/download/).
-It mounts as `G:` by default. Create the folder:
+**1. Install [Google Drive for desktop](https://www.google.com/drive/download/)**
+— already done; it mounts as `G:`.
 
-```
-G:\My Drive\Maldari\inbox
-```
+**2. The folder already exists:** `G:\My Drive\Maldari\inbox`
 
-**On the iPhone** — install the Google Drive app (it registers Drive with the
-Files app, which is what lets a Shortcut save there).
+**3. In Maldari:** Settings → **Words from your phone**
 
-**An API key** — from [console.anthropic.com](https://console.anthropic.com/settings/keys).
-A batch of 25 words on Sonnet 5 costs about **1.3¢** (~500 input tokens at
-$2/Mtok, ~1,200 output at $10/Mtok), so existing credit goes a long way.
-
-**In Maldari** — Settings → *Words from your phone* → set the folder to
-`G:\My Drive\Maldari\inbox` and press **Save path**.
-
----
-
-## 2 · The Shortcut
-
-Five actions. Build it in the Shortcuts app, then add it to your Home Screen
-or the Action Button.
-
-### 1. Ask for Input
-
-- Input Type: **Text**
-- Prompt: `Words (one per line)`
-- Allow Multiple Lines: **on**
-
-### 2. Choose from Menu
-
-Two items: **Learning** and **Reinforced**. In each branch put a *Text* action
-containing `learning` or `reinforcement`, then *Set Variable* → `status`.
-
-### 3. Text
-
-The request body. Paste it exactly, inserting the two variables as variable
-tokens where marked — don't type them literally.
-
-```json
-{
-  "model": "claude-sonnet-5",
-  "max_tokens": 16000,
-  "thinking": { "type": "disabled" },
-  "system": "You are a Korean dictionary for a TOPIK I-II learner. For each word given, return the dictionary form in Hangul, its revised-romanization reading, a short English meaning, and the part of speech. For verbs and descriptive verbs only, also give the present polite 해요체 form; leave politeForm as an empty string for everything else. Set status on every word to the STATUS value the user gives.",
-  "messages": [
-    { "role": "user", "content": "STATUS: [status]\n\nWORDS:\n[Provided Input]" }
-  ],
-  "output_config": {
-    "format": {
-      "type": "json_schema",
-      "schema": {
-        "type": "object",
-        "properties": {
-          "words": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "hangul":         { "type": "string" },
-                "romanization":   { "type": "string" },
-                "englishMeaning": { "type": "string" },
-                "partOfSpeech":   { "type": "string",
-                                    "enum": ["noun","verb","descriptive_verb",
-                                             "adverb","particle","expression"] },
-                "politeForm":     { "type": "string" },
-                "status":         { "type": "string",
-                                    "enum": ["learning","reinforcement"] }
-              },
-              "required": ["hangul","romanization","englishMeaning",
-                           "partOfSpeech","politeForm","status"],
-              "additionalProperties": false
-            }
-          }
-        },
-        "required": ["words"],
-        "additionalProperties": false
-      }
-    }
-  }
-}
-```
-
-`[status]` is the variable from step 2; `[Provided Input]` is the text from
-step 1.
-
-Three things are doing real work here:
-
-- **`output_config.format`** constrains Claude to exactly these fields with a
-  valid `partOfSpeech`. There is no prose to strip and no parsing to get wrong.
-- **`status` is in the schema**, so Claude stamps your menu choice onto every
-  word. That removes the repeat-loop the Shortcut would otherwise need.
-- **`thinking: disabled`** means the response is a single text block, which
-  keeps step 5 trivial. This is a dictionary lookup; there is nothing to reason
-  about, and thinking tokens bill as output.
-
-### 4. Get Contents of URL
-
-- URL: `https://api.anthropic.com/v1/messages`
-- Method: **POST**
-- Headers:
-  - `x-api-key` → your key
-  - `anthropic-version` → `2023-06-01`
-  - `Content-Type` → `application/json`
-- Request Body: **File** → the Text from step 3
-
-### 5. Save File
-
-Between the request and the save, pull the JSON out of the response:
-
-- *Get Dictionary Value* → **Value** for key `content.text`
-- *Get Item from List* → **First Item**
-
-The response body is `{"content": [{"type": "text", "text": "…"}], …}`. With
-thinking disabled there is exactly one block, and structured outputs guarantee
-its text is the JSON.
-
-Then:
-
-- *Save File* → Destination **Google Drive → Maldari → inbox**
-- Filename: a *Current Date* action formatted `yyyy-MM-dd-HHmmss`, plus `.json`
-- Ask Where to Save: **off**
+- **Synced folder** → `G:\My Drive\Maldari\inbox`
+- **API key** → paste your key from
+  [console.anthropic.com](https://console.anthropic.com/settings/keys)
+- **Model** → Sonnet 5
+- **Words arrive as** → Learning or Reinforced, whichever you want new words
+  to be
+- Press **Test**. It defines one word and reports back. If that works, the
+  whole chain works.
+- Press **Save**.
 
 ---
 
-## 3 · What Maldari does with it
+## Part 2 · On the iPhone (once)
 
-At launch — and whenever the window comes back into focus — the app reads
-every `*.json` in the inbox folder and:
+**Install the Google Drive app**, then open **Files → Browse**. If Google Drive
+isn't in the sidebar, tap **⋯ → Edit** and switch it on. A Shortcut can only
+save to Drive if Files can see it.
 
-- **skips words you already have**, matching on hangul the same way the merge
-  tool does, so importing twice adds nothing;
-- **files each word** with the status from the phone;
-- **moves the file** to `inbox\processed\`, never deleting it;
-- **flushes to disk immediately**, so new words survive a crash a second later;
-- **leaves a file alone** if it doesn't parse — usually one still syncing — and
-  tries again next time.
+### Build the Shortcut
 
-A snackbar reports what arrived. Settings → *Words from your phone* →
-**Import now** does the same on demand and shows the detail, including why any
-file was skipped.
+Open **Shortcuts** → **+** → **Add Action**. Two actions:
 
----
+**Action 1 — search for `Ask for Input`**
 
-## 4 · If the API is unreachable
+- Tap **Text** next to "Ask for" and leave it as Text
+- Tap the prompt field and type: `Words`
+- Tap the **⌄** to expand options → turn **Allow Multiple Lines** on
 
-Give the Shortcut an *Otherwise* branch on step 4 that saves just the words:
+**Action 2 — search for `Save File`**
 
-```json
-{ "words": [{ "hangul": "기다리다", "status": "learning" }] }
+- It should say *Save **Provided Input** to…* — if it says something else, tap
+  the input and pick **Provided Input**
+- Turn **Ask Where to Save** off
+- Tap the folder path and choose **Google Drive → My Drive → Maldari → inbox**
+
+Tap the shortcut name at the top, rename it **Korean words**, and choose
+**Add to Home Screen**.
+
+That's the whole thing. No JSON, no API key, no headers.
+
+### Using it
+
+Tap the shortcut, type your words one per line:
+
+```
+기다리다
+숟가락
+조용하다
 ```
 
-Maldari accepts that — `romanization`, `englishMeaning` and `politeForm` are
-all optional. Fill them in later with the local model from the add sheet's
-auto-fill. Capture never depends on the network.
+Tap Done. Open Maldari — the words appear with romanization, English meaning,
+part of speech and (for verbs) the 해요체 form filled in.
 
 ---
 
-## File format
+## What Maldari does with the file
 
-The app accepts either `{"words": [...]}` (what the schema above produces) or a
-bare array:
+At launch, and whenever the window comes back into focus:
+
+1. Reads every file in the inbox — plain text or JSON, extension or not.
+2. Strips bullets and numbering, so `1. 기다리다` and `- 기다리다` both work.
+3. Sends the words to Claude in batches of 25 and fills in the details.
+4. **Skips words you already have**, matching on hangul, so importing twice
+   adds nothing.
+5. Files each word with the status set in Settings.
+6. Moves the file to `inbox\processed\` — never deletes it.
+7. Flushes to disk immediately, so new words survive a crash a second later.
+
+A message tells you what arrived. **Import now** in Settings does the same on
+demand and shows the detail.
+
+### When something goes wrong
+
+| What you see | What it means |
+|---|---|
+| *Folder not found* | The path in Settings doesn't exist, or Drive isn't running |
+| *definitions unavailable* | The API call failed. **The words are still imported**, just bare — fill them in with auto-fill in the add sheet |
+| *Key rejected (401)* | Wrong or revoked key |
+| *n already known* | Those words were already in your collection |
+
+A file that can't be read at all — usually one still syncing — is left alone
+and retried next time, never half-imported.
+
+---
+
+## Cost
+
+About **1.3¢ per 25 words** on Sonnet 5. Definitions are only ever requested
+for words that arrive without them, and never for a word you already have, so
+re-importing costs nothing. Usage: [console.anthropic.com](https://console.anthropic.com/settings/usage).
+
+---
+
+## File format (if you ever want to write one by hand)
+
+Plain text is enough:
+
+```
+기다리다
+숟가락
+```
+
+Full JSON is accepted too, and skips the API call entirely:
 
 ```json
 {
@@ -194,16 +139,6 @@ bare array:
 }
 ```
 
-Only `hangul` is required. `status` is `learning` or `reinforcement`
-(`reinforced` is accepted too); anything else, including a missing field,
-becomes `learning`. An unrecognised `partOfSpeech` becomes `noun`.
-
----
-
-## Notes
-
-- **Model:** `claude-sonnet-5`. Use that exact string — no date suffix.
-- **Cost:** roughly 1.3¢ per 25 words. Check spend at
-  [console.anthropic.com](https://console.anthropic.com/settings/usage).
-- **The key never leaves your phone.** Maldari has no network code for this
-  feature and nothing to store, so none of it can leak through this repo.
+Only `hangul` is required. A `status` in the file overrides the Settings
+default; `partOfSpeech` must be one of `noun`, `verb`, `descriptive_verb`,
+`adverb`, `particle`, `expression`, and anything else becomes `noun`.

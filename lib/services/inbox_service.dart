@@ -5,14 +5,21 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/vocab_word.dart';
+import 'claude_service.dart';
 import 'storage_service.dart';
 
 /// Picks up words captured on the phone and files them into the collection.
 ///
-/// The phone writes a JSON file into a cloud-synced folder; the sync client
-/// puts it on this disk; this reads it. Maldari itself never talks to a cloud
-/// service, which is the whole point of the design — no account, no OAuth, no
-/// API key on the desktop, nothing to keep running.
+/// The phone writes a file into a cloud-synced folder; the sync client puts it
+/// on this disk; this reads it. There is no server and no account — the sync
+/// client is the transport.
+///
+/// A file can be either:
+///
+///   * a plain list of words, one per line — what a two-action Shortcut
+///     produces. [ClaudeService] fills in the readings and meanings here on
+///     import, so the phone has nothing to assemble.
+///   * full JSON, if something else already did that work.
 ///
 /// A file is consumed exactly once: it is moved into `processed/` only after
 /// its words are in the box, so a crash mid-import means the file is simply
@@ -22,6 +29,7 @@ class InboxService {
   static final InboxService instance = InboxService._();
 
   static const _kFolder = 'inbox_folder';
+  static const _kStatus = 'inbox_status';
 
   /// Where Google Drive for desktop mounts by default. Only a starting point —
   /// the real path is whatever the user sets in Settings.
@@ -43,9 +51,26 @@ class InboxService {
     await p.remove(_kFolder);
   }
 
-  /// Reads every `*.json` in the inbox and adds the words it doesn't already
-  /// have. Safe to call as often as you like — importing the same file twice
-  /// adds nothing, and neither does a word already in the collection.
+  /// Which pile phone words land in. A plain word list carries no status, and
+  /// asking the phone to express one is exactly the complexity this design
+  /// removes — so it is a setting here instead.
+  Future<WordStatus> defaultStatus() async {
+    final p = await SharedPreferences.getInstance();
+    return p.getString(_kStatus) == 'reinforcement'
+        ? WordStatus.reinforcement
+        : WordStatus.learning;
+  }
+
+  Future<void> setDefaultStatus(WordStatus s) async {
+    final p = await SharedPreferences.getInstance();
+    await p.setString(
+        _kStatus, s == WordStatus.reinforcement ? 'reinforcement' : 'learning');
+  }
+
+  /// Reads every file in the inbox and adds the words it doesn't already
+  /// have, asking the cloud model for anything the file didn't carry. Safe to
+  /// call as often as you like — importing the same file twice adds nothing,
+  /// and neither does a word already in the collection.
   Future<InboxResult> importNow() async {
     final path = await folder();
     if (path == null) {
@@ -61,7 +86,7 @@ class InboxService {
 
     final files = <File>[
       for (final e in dir.listSync())
-        if (e is File && e.path.toLowerCase().endsWith('.json')) e,
+        if (e is File && _isCandidate(e)) e,
     ]..sort((a, b) => a.path.compareTo(b.path));
 
     if (files.isEmpty) return const InboxResult();
@@ -76,17 +101,57 @@ class InboxService {
     var added = 0;
     var skipped = 0;
     var handled = 0;
+    var defined = 0;
     final errors = <String>[];
+    final fallbackStatus = await defaultStatus();
 
     for (final file in files) {
       List<Map<String, dynamic>> entries;
       try {
-        entries = _parse(await file.readAsString());
+        final raw = await file.readAsString();
+        entries = _parse(raw);
       } catch (e) {
         // Most often a file still syncing — leave it alone and try again on
         // the next run rather than importing half of it.
         errors.add('${_name(file)}: ${_short(e)}');
         continue;
+      }
+
+      // A plain word list arrives with nothing but hangul. Ask Claude for the
+      // rest before anything is written, so a word is either complete or not
+      // imported at all.
+      final bare = [
+        for (final e in entries)
+          if (_needsDefining(e)) (e['hangul'] ?? '').toString().trim(),
+      ]..removeWhere((w) => w.isEmpty);
+
+      if (bare.isNotEmpty && await ClaudeService.instance.isConfigured) {
+        try {
+          final byWord = <String, Map<String, dynamic>>{
+            for (final d in await ClaudeService.instance.define(bare))
+              (d['hangul'] ?? '').toString().trim(): d,
+          };
+          for (final e in entries) {
+            final match = byWord[(e['hangul'] ?? '').toString().trim()];
+            if (match == null) continue;
+            for (final field in const [
+              'romanization',
+              'englishMeaning',
+              'partOfSpeech',
+              'politeForm',
+            ]) {
+              final v = (match[field] ?? '').toString();
+              if ((e[field] ?? '').toString().trim().isEmpty && v.isNotEmpty) {
+                e[field] = v;
+              }
+            }
+            defined++;
+          }
+        } catch (e) {
+          // Import the bare words anyway: losing the capture would be worse
+          // than importing a word you can auto-fill later.
+          errors.add('${_name(file)}: definitions unavailable — ${_short(e)}');
+        }
       }
 
       var wroteAny = false;
@@ -99,7 +164,7 @@ class InboxService {
           continue;
         }
         try {
-          final word = _wordFrom(entry, hangul);
+          final word = _wordFrom(entry, hangul, fallbackStatus);
           await box.put(word.id, word);
           added++;
           wroteAny = true;
@@ -124,24 +189,64 @@ class InboxService {
       added: added,
       skipped: skipped,
       files: handled,
+      defined: defined,
       errors: errors,
     );
   }
 
-  /// Accepts either a bare array or `{"words": [...]}`, since a shortcut is
-  /// easy to build either way and neither is worth failing over.
+  /// Files worth looking at. Extension-tolerant on purpose — one fewer thing
+  /// to get exactly right on the phone — but sync clients and Explorer leave
+  /// their own droppings in every folder, and those are not vocabulary.
+  static bool _isCandidate(File f) {
+    final name = _name(f).toLowerCase();
+    if (name.startsWith('.') || name.startsWith('~\$')) return false;
+    if (name == 'desktop.ini' || name == 'thumbs.db') return false;
+    return name.endsWith('.json') ||
+        name.endsWith('.txt') ||
+        !name.contains('.');
+  }
+
+  /// Accepts JSON — a bare array or `{"words": [...]}` — or a plain list of
+  /// words, one per line. The plain list is what the phone actually sends;
+  /// JSON is for anything that already knows the full shape.
   List<Map<String, dynamic>> _parse(String raw) {
-    final decoded = jsonDecode(raw);
-    final list = decoded is List
-        ? decoded
-        : (decoded is Map ? (decoded['words'] as List? ?? const []) : const []);
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return const [];
+
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      final decoded = jsonDecode(trimmed);
+      final list = decoded is List
+          ? decoded
+          : (decoded is Map
+              ? (decoded['words'] as List? ?? const [])
+              : const []);
+      return [
+        for (final e in list)
+          if (e is Map) Map<String, dynamic>.from(e),
+      ];
+    }
+
+    // Plain text. Split on lines and commas so either habit works, and drop
+    // anything that isn't a word — bullet characters, numbering, stray dashes.
     return [
-      for (final e in list)
-        if (e is Map) Map<String, dynamic>.from(e),
+      for (final line in trimmed.split(RegExp(r'[\r\n,]+')))
+        if (_cleanWord(line).isNotEmpty) {'hangul': _cleanWord(line)},
     ];
   }
 
-  VocabWord _wordFrom(Map<String, dynamic> e, String hangul) {
+  static String _cleanWord(String line) =>
+      line.trim().replaceAll(RegExp(r'^[-*•\d.)\s]+'), '').trim();
+
+  /// True when an entry is just a word with no reading or meaning yet.
+  static bool _needsDefining(Map<String, dynamic> e) =>
+      (e['romanization'] ?? '').toString().trim().isEmpty ||
+      (e['englishMeaning'] ?? e['english'] ?? '').toString().trim().isEmpty;
+
+  VocabWord _wordFrom(
+    Map<String, dynamic> e,
+    String hangul,
+    WordStatus fallbackStatus,
+  ) {
     final pos = (e['partOfSpeech'] ?? '').toString().trim();
     final status = (e['status'] ?? '').toString().trim().toLowerCase();
 
@@ -158,9 +263,13 @@ class InboxService {
           PartsOfSpeech.all.contains(pos) ? pos : PartsOfSpeech.noun,
       politeForm: (e['politeForm'] ?? '').toString().trim(),
       dateAdded: DateTime.now(),
-      status: status == 'reinforcement' || status == 'reinforced'
-          ? WordStatus.reinforcement
-          : WordStatus.learning,
+      // An explicit status in the file wins; a plain word list has none, and
+      // takes the pile chosen in Settings.
+      status: switch (status) {
+        'reinforcement' || 'reinforced' => WordStatus.reinforcement,
+        'learning' => WordStatus.learning,
+        _ => fallbackStatus,
+      },
     );
   }
 
@@ -200,6 +309,7 @@ class InboxResult {
     this.added = 0,
     this.skipped = 0,
     this.files = 0,
+    this.defined = 0,
     this.errors = const [],
     this.configured = true,
   });
@@ -212,6 +322,9 @@ class InboxResult {
 
   /// Files consumed and moved to `processed/`.
   final int files;
+
+  /// Words the cloud model filled in on the way through.
+  final int defined;
 
   final List<String> errors;
 
@@ -226,6 +339,7 @@ class InboxResult {
     if (isEmpty) return 'Nothing new in the inbox.';
     final parts = <String>[
       if (added > 0) '$added added',
+      if (defined > 0) '$defined defined',
       if (skipped > 0) '$skipped already known',
       if (errors.isNotEmpty) '${errors.length} problem'
           '${errors.length == 1 ? '' : 's'}',
