@@ -28,12 +28,26 @@ class StorageService {
   Box<String>? _storiesBox;
   Box<String>? _setsBox;
 
+  /// Where the boxes live, for the locked-out screen to name.
+  String? get storageDirectory => _dir;
+
   /// Directory the boxes live in — needed to quarantine a damaged file.
   String? _dir;
 
   /// Debounced durability: see [_armAutoFlush].
   Timer? _flushTimer;
   final List<StreamSubscription<BoxEvent>> _watchers = [];
+
+  /// True when the data files are held open by another copy of the app.
+  ///
+  /// This is NOT a data problem, and it must never be treated as one: the
+  /// boxes are intact and someone else is simply using them. The app refuses
+  /// to start rather than opening empty stand-ins, because an empty
+  /// collection is indistinguishable from having lost everything.
+  bool lockedOut = false;
+
+  /// Which boxes were locked, for the message.
+  final List<String> lockedBoxes = [];
 
   /// Human-readable notes about anything repaired at startup. Empty on a
   /// normal launch; surfaced in Settings when not.
@@ -120,12 +134,22 @@ class StorageService {
       Hive.registerAdapter(GrammarTopicAdapter());
     }
 
-    _box = await _openRecovering<VocabWord>(_primaryBox);
-    _blocksBox = await _openRecovering<BlockEntry>(_blocksBoxName);
-    _grammarBox = await _openRecovering<GrammarTopic>(_grammarBoxName);
-    _detailsBox = await _openRecovering<String>(_detailsBoxName);
-    _storiesBox = await _openRecovering<String>(_storiesBoxName);
-    _setsBox = await _openRecovering<String>(_setsBoxName);
+    lockedOut = false;
+    lockedBoxes.clear();
+
+    try {
+      _box = await _openRecovering<VocabWord>(_primaryBox);
+      _blocksBox = await _openRecovering<BlockEntry>(_blocksBoxName);
+      _grammarBox = await _openRecovering<GrammarTopic>(_grammarBoxName);
+      _detailsBox = await _openRecovering<String>(_detailsBoxName);
+      _storiesBox = await _openRecovering<String>(_storiesBoxName);
+      _setsBox = await _openRecovering<String>(_setsBoxName);
+    } on StorageLockedException {
+      // Stop here. Nothing further may run — seeding a fresh box while the
+      // real one is locked would be the worst outcome of all.
+      await _closePartial();
+      return;
+    }
 
     // From here on, every write is flushed to disk shortly after it lands.
     _armAutoFlush();
@@ -204,32 +228,63 @@ class StorageService {
   /// earlier version called `deleteBoxFromDisk` here, which turned a torn
   /// tail into total data loss.)
   Future<Box<T>> _openRecovering<T>(String name) async {
-    try {
-      return await Hive.openBox<T>(name, crashRecovery: true);
-    } catch (e) {
-      recoveryNotes.add('$name: $e');
-
-      // Drop any half-registered handle before touching the files.
+    // A lock and a damaged file both surface as "could not open", and they
+    // need opposite responses. Locked means the data is fine and someone else
+    // has it — wait, then refuse. Damaged means repair it. Getting this
+    // backwards quarantines a healthy box, or presents an empty one as if the
+    // collection were gone.
+    for (var attempt = 0;; attempt++) {
       try {
-        await Hive.box<T>(name).close();
-      } catch (_) {}
+        return await Hive.openBox<T>(name, crashRecovery: true);
+      } catch (e) {
+        if (_looksLocked(e)) {
+          // Usually another instance on its way out; the lock clears in a
+          // second or two.
+          if (attempt < 4) {
+            await Future<void>.delayed(const Duration(milliseconds: 400));
+            continue;
+          }
+          if (!lockedBoxes.contains(name)) lockedBoxes.add(name);
+          lockedOut = true;
+          throw StorageLockedException(name);
+        }
 
-      final quarantined = await _quarantine(name);
-      try {
-        final box = await Hive.openBox<T>(name, crashRecovery: true);
-        recoveryNotes.add(quarantined == null
-            ? '$name: reopened after recovery.'
-            : '$name: damaged file kept as ${quarantined.split(Platform.pathSeparator).last}.');
-        return box;
-      } catch (_) {
-        // Couldn't even reopen under the same name — most often a file lock
-        // (OneDrive mid-sync on Windows). Use a timestamped box so the app
-        // still starts; the original file is untouched.
-        final fallback = '${name}_${DateTime.now().millisecondsSinceEpoch}';
-        recoveryNotes.add('$name: locked — running on $fallback instead.');
-        return await Hive.openBox<T>(fallback, crashRecovery: true);
+        recoveryNotes.add('$name: $e');
+
+        // Drop any half-registered handle before touching the files.
+        try {
+          await Hive.box<T>(name).close();
+        } catch (_) {}
+
+        final quarantined = await _quarantine(name);
+        try {
+          final box = await Hive.openBox<T>(name, crashRecovery: true);
+          recoveryNotes.add(quarantined == null
+              ? '$name: reopened after recovery.'
+              : '$name: damaged file kept as ${quarantined.split(Platform.pathSeparator).last}.');
+          return box;
+        } catch (e2) {
+          if (!lockedBoxes.contains(name)) lockedBoxes.add(name);
+          lockedOut = true;
+          throw StorageLockedException(name);
+        }
       }
     }
+  }
+
+  /// True when a failure to open is another process holding the file, rather
+  /// than the file being damaged.
+  static bool _looksLocked(Object e) {
+    if (e is FileSystemException) {
+      final code = e.osError?.errorCode;
+      // 32 ERROR_SHARING_VIOLATION, 33 ERROR_LOCK_VIOLATION on Windows.
+      if (code == 32 || code == 33) return true;
+    }
+    final m = e.toString().toLowerCase();
+    return m.contains('another process') ||
+        m.contains('being used by') ||
+        m.contains('sharing violation') ||
+        m.contains('lock');
   }
 
   /// Renames the box's file out of the way instead of deleting it. Returns
@@ -261,6 +316,29 @@ class StorageService {
   /// Hive writes each `put` to the file handle immediately, which already
   /// survives the process being killed, but NOT the machine losing power.
   /// Flushing closes that window.
+  /// Closes whatever managed to open before a lock stopped us, so a retry
+  /// starts from nothing rather than from half a session.
+  Future<void> _closePartial() async {
+    for (final b in <BoxBase<Object?>?>[
+      _box,
+      _blocksBox,
+      _grammarBox,
+      _detailsBox,
+      _storiesBox,
+      _setsBox,
+    ]) {
+      try {
+        if (b != null && b.isOpen) await b.close();
+      } catch (_) {}
+    }
+    _box = null;
+    _blocksBox = null;
+    _grammarBox = null;
+    _detailsBox = null;
+    _storiesBox = null;
+    _setsBox = null;
+  }
+
   Future<void> flushAll() async {
     _flushTimer?.cancel();
     for (final b in <BoxBase<Object?>?>[
@@ -413,4 +491,12 @@ class StorageService {
       // ignore — already closed or OneDrive locked
     }
   }
+}
+
+/// Thrown when the data files are held open by another copy of the app.
+class StorageLockedException implements Exception {
+  const StorageLockedException(this.boxName);
+  final String boxName;
+  @override
+  String toString() => 'Storage locked: $boxName';
 }
