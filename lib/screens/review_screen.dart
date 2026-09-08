@@ -265,14 +265,6 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
     Timer(const Duration(seconds: 3), bar.close);
   }
 
-  void _seeExamples(VocabWord word) {
-    // Stash the word for the Examples tab to consume, switch tabs, and
-    // also pre-select it so the picker shows the right word.
-    ref.read(selectedWordProvider.notifier).state = word;
-    ref.read(pendingExampleWordProvider.notifier).state = word;
-    ref.read(activeTabProvider.notifier).state = 2;
-  }
-
   @override
   Widget build(BuildContext context) {
     // Rebuild the deck whenever a Review preference changes. Widget-level
@@ -415,22 +407,6 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
                       ),
                     ),
                     const SizedBox(width: 14),
-                    Tooltip(
-                      message: 'See example sentences for this word',
-                      child: InkWell(
-                        onTap: () => _seeExamples(word),
-                        borderRadius: BorderRadius.circular(20),
-                        child: Padding(
-                          padding: const EdgeInsets.all(4),
-                          child: Icon(
-                            Icons.auto_awesome_outlined,
-                            size: 16,
-                            color: AppColors.deepGold,
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 4),
                     // Always here, never announced: the archive control holds
                     // its place in the row from the first card so nothing
                     // shifts or pops up when the lap ends — it simply lights
