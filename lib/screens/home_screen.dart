@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../providers/vocab_provider.dart';
+import '../services/inbox_service.dart';
 import '../theme/app_colors.dart';
 import '../widgets/data_safety_sheet.dart';
 import 'blocks_screen.dart';
@@ -116,6 +119,14 @@ class HomeScreen extends ConsumerWidget {
             ),
           ),
           actions: [
+            // Importing is a thing you do, not a thing you configure, so it
+            // lives in the header rather than three taps deep in Settings.
+            _CircleAction(
+              icon: Icons.download_outlined,
+              tooltip: 'Import words from phone',
+              onTap: () => _importFromPhone(context, ref),
+            ),
+            const SizedBox(width: 8),
             // Next to Settings, and deliberately not inside it: the one
             // question this answers — "will I lose my words?" — is asked
             // before anyone goes looking through preferences.
@@ -326,6 +337,32 @@ class _NavItem extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Pulls in whatever the phone has sent, and always says what happened.
+///
+/// Deliberately louder than the automatic import: that one runs on its own and
+/// stays quiet when there is nothing to report, but a press is a question, and
+/// a question deserves an answer even when the answer is "nothing new".
+Future<void> _importFromPhone(BuildContext context, WidgetRef ref) async {
+  final messenger = ScaffoldMessenger.of(context);
+  final result = await InboxService.instance.importNow();
+  if (result.changedAnything) ref.read(vocabProvider.notifier).refresh();
+  if (!context.mounted) return;
+
+  messenger.clearSnackBars();
+  final bar = messenger.showSnackBar(
+    SnackBar(
+      content: Text(
+        result.configured
+            ? result.summary
+            : 'No inbox folder set — add one in Settings',
+      ),
+      duration: const Duration(seconds: 4),
+      showCloseIcon: true,
+    ),
+  );
+  Timer(const Duration(seconds: 4), bar.close);
 }
 
 /// Asks before opening Settings.

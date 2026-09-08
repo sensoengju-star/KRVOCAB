@@ -92,6 +92,14 @@ class _MaldariAppState extends ConsumerState<MaldariApp>
     // Words captured on the phone land here on the way in. After the first
     // frame, so a slow or cloud-backed folder can never hold up startup.
     WidgetsBinding.instance.addPostFrameCallback((_) => _importInbox());
+
+    // And again shortly after. A file the phone saved a moment ago may still
+    // be on its way down when the app opens, and the sync client gives no
+    // signal when it lands — a second look costs nothing and saves you
+    // wondering where your words went.
+    Timer(const Duration(seconds: 10), () {
+      if (mounted) unawaited(_importInbox());
+    });
   }
 
   /// Pulls in anything the phone dropped in the synced folder.
