@@ -168,9 +168,9 @@ class _InboxSettingsState extends ConsumerState<InboxSettings> {
             context,
             'A file from the phone is a numbered list of words. Claude '
             'corrects typos and fills in the reading, meaning, part of speech '
-            'and 해요체 form on import. Unnumbered lines are skipped and '
-            'reported. The key is stored on this machine only — never in the '
-            'project.',
+            'and 해요체 form on import. A file with one line is that word; '
+            'in a longer list every line needs a number. The key is stored on '
+            'this machine only — never in the project.',
           ),
           const SizedBox(height: 10),
           _field(

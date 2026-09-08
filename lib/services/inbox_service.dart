@@ -358,16 +358,19 @@ class InboxService {
 
   /// A numbered line: `1. 가다`, `2) 가다`, `3 가다`, `4.가다`.
   ///
-  /// The number is the thing that makes a line a word. Requiring it is a
-  /// deliberate filter: a captured file is whatever was in a text field on a
-  /// phone, and without a marker there is no way to tell a vocabulary word
-  /// from a stray line, an autocorrect artefact or a note to self. Numbering
-  /// is cheap to type and unambiguous to read.
+  /// Among several lines, the number is what makes a line a word: a captured
+  /// file is whatever was in a text field on a phone, and in a list there is
+  /// no telling a vocabulary word from a stray thought or an autocorrect
+  /// artefact. A lone line carries no such doubt and is taken as the word,
+  /// numbered or not.
   static final RegExp _numbered = RegExp(r'^\s*\d+\s*[.)\]:]?\s*(.+)$');
 
-  /// Accepts JSON — a bare array or `{"words": [...]}` — or a NUMBERED list of
-  /// words, one per line. Anything unnumbered is collected into [ignored] for
-  /// the caller to report; it is never imported.
+  /// Accepts JSON — a bare array or `{"words": [...]}` — or a list of words,
+  /// one per line.
+  ///
+  /// A file with ONE line is that word, numbered or not. With two or more,
+  /// every line must be numbered; anything unnumbered is collected into
+  /// [ignored] for the caller to report, and never imported.
   List<Map<String, dynamic>> _parse(String raw, List<String> ignored) {
     final trimmed = raw.trim();
     if (trimmed.isEmpty) return const [];
@@ -385,9 +388,27 @@ class InboxService {
       ];
     }
 
+    final lines = [
+      for (final line in trimmed.split(RegExp(r'[\r\n]+')))
+        if (line.trim().isNotEmpty) line,
+    ];
+
+    // A single line needs no marker. The numbering rule exists to tell a word
+    // from a stray line in a LIST; a file holding one line carries no such
+    // ambiguity, and demanding "1. " in front of it taxes the whole point of
+    // the feature — catching a word the moment it occurs to you, one-handed,
+    // away from the computer.
+    if (lines.length == 1) {
+      final only = lines.first.trim();
+      final match = _numbered.firstMatch(only);
+      final word = (match?.group(1) ?? only).trim();
+      return word.isEmpty ? const [] : [
+        {'hangul': word}
+      ];
+    }
+
     final out = <Map<String, dynamic>>[];
-    for (final line in trimmed.split(RegExp(r'[\r\n]+'))) {
-      if (line.trim().isEmpty) continue;
+    for (final line in lines) {
       final match = _numbered.firstMatch(line);
       final word = (match?.group(1) ?? '').trim();
       if (match == null || word.isEmpty) {

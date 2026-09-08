@@ -63,7 +63,7 @@ Open **Shortcuts** → **+** → **Add Action**. Two actions.
 **Action 1 — search for `Ask for Input`**
 
 - Tap **Text** next to "Ask for" and leave it as Text
-- Tap the prompt field and type: `Words (numbered)`
+- Tap the prompt field and type: `Word, or numbered list`
 - Tap the action's **›** to expand it → turn **Allow Multiple Lines** on
 
 **Action 2 — search for `Save File`**
@@ -113,7 +113,8 @@ That's the whole thing. No JSON, no API key, no headers.
 
 ### Using it
 
-Tap the shortcut and type your words as a **numbered list**, one per line:
+Tap the shortcut and type your word. For several at once, use a **numbered
+list**, one per line:
 
 ```
 1. 기다리다
@@ -124,14 +125,19 @@ Tap the shortcut and type your words as a **numbered list**, one per line:
 `1.`, `2)`, `3]` and `4 가다` all count; the marker is stripped and the rest of
 the line is the word.
 
-> **Only numbered lines are imported.** A line without a number is skipped and
-> reported, never guessed at. A captured file is just whatever was in a text
-> field on a phone, and without a marker there is no way to tell a vocabulary
-> word from a stray line, an autocorrect artefact or a note to self. Numbering
-> is cheap to type and unambiguous to read.
+> **One word needs no number.** Capturing a single word — the usual case, when
+> something occurs to you and you want it down — is just the word:
 >
-> If a file has unnumbered lines, the import report names them — *ignored 2
-> unnumbered lines (…) — number every line* — so nothing disappears quietly.
+> ```
+> 서성이다
+> ```
+>
+> **Two or more lines must all be numbered.** That is where the marker earns
+> its keep: a captured file is whatever was in a text field on a phone, and in
+> a list there is no telling a vocabulary word from a stray thought or an
+> autocorrect artefact. Unnumbered lines in a multi-line file are skipped and
+> named in the report — *ignored 2 unnumbered lines (…) — number every line* —
+> so nothing disappears quietly.
 
 Tap Done. Open Maldari — the words appear with romanization, English meaning,
 part of speech and (for verbs) the 해요체 form filled in.
@@ -153,8 +159,8 @@ beside it.
 At launch, and whenever the window comes back into focus:
 
 1. Reads every file in the inbox — plain text or JSON, extension or not.
-2. Takes the numbered lines and strips the numbering. Unnumbered lines are
-   skipped and reported.
+2. Takes a lone line as one word; in a multi-line file, takes the numbered
+   lines and strips the numbering, skipping and reporting the rest.
 3. Sends the words to Claude in batches of 25, which corrects typos and fills
    in the details. Corrections are reported, never silent.
 4. **Skips words you already have**, matching on hangul, so importing twice
@@ -176,7 +182,7 @@ demand and shows the detail.
 | *Key rejected (401)* | Wrong or revoked key |
 | *n already known* | Those words were already in your collection |
 | Words in the wrong pile | A file saved straight into `Maldari` takes the Settings status *at import time*. Save to the `reinforced` subfolder to decide at capture time instead |
-| *ignored n unnumbered lines* | Those lines had no number, so they were not imported. Number every line and capture again |
+| *ignored n unnumbered lines* | In a file of several lines, those had no number. A single word never needs one; number every line when you capture more than one |
 | Nothing arrives at all | Save File is saving the wrong thing — its input must be **Provided Input**, which only exists if Ask for Input is *above* it |
 
 A file that can't be read at all — usually one still syncing — is left alone
@@ -194,7 +200,7 @@ re-importing costs nothing. Usage: [console.anthropic.com](https://console.anthr
 
 ## File format (if you ever want to write one by hand)
 
-A numbered list is enough:
+A single word, or a numbered list:
 
 ```
 1. 기다리다
