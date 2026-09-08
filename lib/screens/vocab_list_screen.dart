@@ -103,6 +103,7 @@ class _VocabListScreenState extends ConsumerState<VocabListScreen> {
     final combined = ref.watch(combinedViewProvider);
     final daily = ref.watch(dailyWordsProvider);
     final setAside = ref.watch(setAsideIdsProvider);
+    final sets = ref.watch(wordSetsProvider);
     final showSetAside = ref.watch(showSetAsideProvider);
     // The combined list is today's draw — unless a search or filter is on,
     // in which case it falls back to the whole collection (see
@@ -357,11 +358,16 @@ class _VocabListScreenState extends ConsumerState<VocabListScreen> {
             // Words held in a review set are hidden from the list. Say so
             // where the missing words would have been, with the switch that
             // brings them back — otherwise they just look deleted.
-            if (setAside.isNotEmpty)
+            //
+            // Shown whenever ANY set exists, not just when words are hidden:
+            // it is the list's only door to the shelf, and switching every
+            // set back on used to take that door away with it.
+            if (sets.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.fromLTRB(24, 6, 24, 0),
                 child: _SetAsideStrip(
                   count: setAside.length,
+                  setCount: sets.length,
                   showing: showSetAside,
                   onToggle: () => ref
                       .read(showSetAsideProvider.notifier)
@@ -1075,12 +1081,19 @@ String _buildDetailedExport(List<VocabWord> words) {
 class _SetAsideStrip extends StatelessWidget {
   const _SetAsideStrip({
     required this.count,
+    required this.setCount,
     required this.showing,
     required this.onToggle,
     required this.onOpenShelf,
   });
 
+  /// Words currently hidden. Zero when every set is switched back on — the
+  /// strip stays put and simply changes what it says.
   final int count;
+
+  /// How many sets exist at all.
+  final int setCount;
+
   final bool showing;
   final VoidCallback onToggle;
   final VoidCallback onOpenShelf;
@@ -1101,33 +1114,43 @@ class _SetAsideStrip extends StatelessWidget {
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              showing ? '보관 중인 단어 $count개를 함께 보는 중' : '보관 중인 단어 $count개는 숨겨져 있어요',
+              count == 0
+                  ? '보관한 세트 $setCount개 · 모두 복습 중이에요'
+                  : showing
+                      ? '보관 중인 단어 $count개를 함께 보는 중'
+                      : '보관 중인 단어 $count개는 숨겨져 있어요',
               style: GoogleFonts.notoSerifKr(
                 color: AppColors.mutedInk(context),
                 fontSize: 12,
               ),
             ),
           ),
-          TextButton(
-            onPressed: onToggle,
-            style: TextButton.styleFrom(
-              foregroundColor: AppColors.antiqueGold,
-              visualDensity: VisualDensity.compact,
-              padding: const EdgeInsets.symmetric(horizontal: 10),
+          // Nothing to reveal when nothing is hidden — but the strip itself
+          // stays, so the shelf is still one tap away.
+          if (count > 0)
+            TextButton(
+              onPressed: onToggle,
+              style: TextButton.styleFrom(
+                foregroundColor: AppColors.antiqueGold,
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+              ),
+              child: Text(
+                showing ? '숨기기' : '보기',
+                style: GoogleFonts.notoSerifKr(
+                    fontSize: 12, fontWeight: FontWeight.w700),
+              ),
             ),
-            child: Text(
-              showing ? '숨기기' : '보기',
-              style: GoogleFonts.notoSerifKr(
-                  fontSize: 12, fontWeight: FontWeight.w700),
-            ),
-          ),
           Tooltip(
-            message: '보관한 세트',
+            message: '보관한 세트 열기',
             child: IconButton(
               onPressed: onOpenShelf,
               visualDensity: VisualDensity.compact,
               icon: Icon(Icons.chevron_right,
-                  size: 18, color: AppColors.mutedInk(context)),
+                  size: 18,
+                  color: count == 0
+                      ? AppColors.antiqueGold
+                      : AppColors.mutedInk(context)),
             ),
           ),
         ],
