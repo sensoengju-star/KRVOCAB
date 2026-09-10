@@ -76,7 +76,10 @@ class _TraySettingsState extends State<TraySettings> {
                     Text(
                       'The window hides to the notification area instead of '
                       'quitting, and words from your phone keep arriving on '
-                      'their own. Quit from the tray icon when you mean it.',
+                      'their own. Quit from the tray icon when you mean it — '
+                      'though you never have to: shutting Windows down with '
+                      'Maldari still running costs nothing. See Data safety '
+                      'in the header.',
                       style: GoogleFonts.inter(
                         color: AppColors.mutedInk(context),
                         fontSize: 12,

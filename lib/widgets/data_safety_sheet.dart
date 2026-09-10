@@ -99,6 +99,15 @@ class DataSafetySheet extends StatelessWidget {
                   const SizedBox(height: 16),
                   _sectionLabel(context, 'HOW IT SAVES'),
                   const _Point(
+                    icon: Icons.power_off_outlined,
+                    title: 'You never have to quit first',
+                    body: 'Shut the machine down with Maldari still in the '
+                        'tray, kill it from Task Manager, pull the plug — none '
+                        'of it costs you a word. Nothing here depends on the '
+                        'app being closed politely. Quitting from the tray is '
+                        'tidier, not safer.',
+                  ),
+                  const _Point(
                     icon: Icons.save_outlined,
                     title: 'Written to disk within 0.4 seconds',
                     body: 'Adding or editing a word schedules a write almost '
@@ -117,10 +126,19 @@ class DataSafetySheet extends StatelessWidget {
                   const _Point(
                     icon: Icons.laptop_chromebook_outlined,
                     title: 'Safe the moment it leaves the screen',
-                    body: 'Anything other than "in the foreground" triggers a '
-                        'save — backgrounding, a closing lid, a shutting-down '
-                        'machine. Whatever kills the app after that arrives '
-                        'too late to cost you anything.',
+                    body: 'Closing the window to the tray saves everything '
+                        'first, and so does going to the background or a '
+                        'closing lid. Whatever kills the app after that '
+                        'arrives too late to cost you anything.',
+                  ),
+                  const _Point(
+                    icon: Icons.exit_to_app,
+                    title: 'Quit saves before it does anything else',
+                    body: 'Choosing Quit writes everything to disk before it '
+                        'hides the window, closes the files or stops the '
+                        'model. If the machine dies halfway through that '
+                        'tidying, the words are already safe — the rest is '
+                        'housekeeping, not something your data rests on.',
                   ),
                   const SizedBox(height: 10),
                   _sectionLabel(context, 'WHEN A FILE IS DAMAGED'),
@@ -141,11 +159,12 @@ class DataSafetySheet extends StatelessWidget {
                   ),
                   const _Point(
                     icon: Icons.lock_outline,
-                    title: 'Opens even when the file is locked',
-                    body: 'If something else is holding the file — OneDrive '
-                        'mid-sync is the usual culprit — the app runs on a '
-                        'temporary store instead of forcing its way in. The '
-                        'original is left untouched.',
+                    title: 'Refuses rather than shows you an empty list',
+                    body: 'If another copy of the app is holding the files, '
+                        'this one will not start on empty stand-ins — that '
+                        'looks exactly like having lost everything. It says so '
+                        'instead, and waits. A lock is never mistaken for '
+                        'damage, so a healthy file is never renamed aside.',
                   ),
                   const SizedBox(height: 10),
                   _sectionLabel(context, 'WHAT IS COVERED'),
