@@ -62,6 +62,7 @@ class TtsService {
       await _quiet(() => _tts.setPitch(1.0));
       await setRate(_rate);
       isKoreanAvailable = true;
+      unawaited(_warmUp());
     } catch (e) {
       isKoreanAvailable = false;
       unavailableReason = '$_missingVoiceMessage\n\n($e)';
@@ -134,6 +135,38 @@ class TtsService {
 
   /// Speaks [text]. Any utterance already playing is cut off first, so
   /// tapping through cards quickly doesn't queue up a backlog.
+  /// Speaks once, silently, so the first real word is not the one that pays
+  /// for the engine starting up.
+  ///
+  /// The Windows speech engine opens its voice and audio device lazily, on the
+  /// first utterance, and the beginning of that utterance is swallowed while
+  /// it does — which is why the first syllable of the first word went missing
+  /// and everything after it was fine. Doing it here, muted, at startup, means
+  /// the cost is paid by nobody.
+  bool _warmed = false;
+
+  Future<void> _warmUp() async {
+    if (_warmed) return;
+    _warmed = true;
+    try {
+      await _quiet(() => _tts.setVolume(0));
+      await _tts.speak('$_pausePrefix가');
+      await _tts.stop();
+    } catch (e) {
+      _log('warm-up skipped: $e');
+    } finally {
+      // Whatever happened, do not leave the engine muted.
+      await _quiet(() => _tts.setVolume(1.0));
+    }
+  }
+
+  /// A moment of nothing before the word.
+  ///
+  /// Belt to the warm-up's braces: if the engine still clips the opening —
+  /// after a device change, or when Windows has let the voice go idle — it
+  /// clips this instead of the first syllable.
+  static const String _pausePrefix = ' , ';
+
   Future<void> speak(String text) async {
     final t = text.trim();
     if (t.isEmpty) return;
@@ -143,7 +176,8 @@ class TtsService {
     try {
       if (_speaking) await _tts.stop();
       _speaking = true;
-      await _tts.speak(t);
+      await _warmUp();
+      await _tts.speak('$_pausePrefix$t');
     } catch (e) {
       _log('speak failed: $e');
     } finally {
