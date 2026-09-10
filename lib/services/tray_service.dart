@@ -8,6 +8,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
+import 'storage_service.dart';
+
 /// Keeps Maldari alive in the notification area after its window is closed.
 ///
 /// The point is the inbox. Words captured on the phone are imported at launch
@@ -45,8 +47,12 @@ class TrayService with TrayListener, WindowListener {
   /// which owns the provider container.
   Future<bool> Function()? onImport;
 
-  /// Called when the window is hidden, so on-demand services can stand down.
+  /// Called when the window is hidden, so services that only matter while
+  /// someone is looking can stand down.
   Future<void> Function()? onHide;
+
+  /// Called when the window comes back, so those services can start again.
+  Future<void> Function()? onShow;
 
   /// Called for a real quit, so shutdown still flushes and closes properly.
   Future<void> Function()? onQuit;
@@ -227,8 +233,10 @@ class TrayService with TrayListener, WindowListener {
   Future<void> show() async {
     await windowManager.show();
     await windowManager.focus();
-    // You are looking at it again; look for words again too.
+    // You are looking at it again; look for words again too, and bring back
+    // whatever stood down while nobody was.
     await quicken();
+    unawaited(onShow?.call());
   }
 
   Future<void> hide() async {
@@ -237,12 +245,37 @@ class TrayService with TrayListener, WindowListener {
   }
 
   /// The only path that actually ends the process.
+  ///
+  /// Disappears first, then tidies up. Closing the boxes and stopping the
+  /// model server take a moment, and a window still sitting there after you
+  /// chose Quit reads as the app having hung — so the visible parts go at
+  /// once and the slow work happens behind an empty screen.
   Future<void> quit() async {
     _poll?.cancel();
+    _quitting = true;
+
+    // Durable BEFORE anything slow happens. Everything after this point —
+    // hiding, closing boxes, killing the model server — can be interrupted by
+    // the machine going down without costing a word, because the words are
+    // already on disk. Cleanup is then a courtesy, not a dependency.
+    try {
+      await StorageService.instance.flushAll();
+    } catch (_) {}
+
+    try {
+      await windowManager.hide();
+    } catch (_) {}
+    try {
+      await trayManager.destroy();
+    } catch (_) {}
+
     await onQuit?.call();
-    await stop();
     exit(0);
   }
+
+  /// Set once Quit has been chosen, so a close arriving during the tidy-up
+  /// isn't mistaken for someone asking to hide.
+  bool _quitting = false;
 
   // --- tray ---------------------------------------------------------------
 
@@ -269,6 +302,7 @@ class TrayService with TrayListener, WindowListener {
 
   @override
   void onWindowClose() async {
+    if (_quitting) return;
     // Closing hides; only the tray's Quit ends the app. A close that silently
     // killed a resident app would make "is it running?" unanswerable.
     if (await runInTray()) {

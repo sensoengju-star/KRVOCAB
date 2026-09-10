@@ -50,10 +50,14 @@ Future<void> main(List<String> args) async {
     GoogleFonts.notoSerifKr(),
   ]));
 
-  // The model server is NOT started here any more. Living in the tray means
-  // launching it at startup would keep a model resident all day for someone
-  // who may only have opened the app to add a word. It starts on demand
-  // instead — see LlmService — and stops when the window hides.
+  // Start the model server with the app, so the first story or example does
+  // not wait on a model load. Fire-and-forget: the UI never blocks on it, and
+  // LlmConfig.load still calls ensureRunning before any request, which covers
+  // a request made while the server is stopped.
+  //
+  // It still stops when the window hides and starts again when it returns —
+  // that is what keeps a tray app from holding a model resident all day.
+  unawaited(LlmLauncher.instance.ensureRunning());
 
   // Probe the platform speech engine for a Korean voice. Fire-and-forget:
   // the first `speak()` awaits init anyway, this just gets the answer ready
@@ -79,6 +83,7 @@ Future<void> _startTray() async {
   tray.onImport = () async => _backgroundImport();
   // Hiding is the moment nothing is being looked at: a good time to let the
   // model server go.
+  tray.onShow = () async => LlmLauncher.instance.ensureRunning();
   tray.onHide = () async {
     // Closing the window is often the last thing done before walking away or
     // shutting the machine down. Get everything on disk now rather than
@@ -87,10 +92,15 @@ Future<void> _startTray() async {
     await LlmLauncher.instance.stop();
   };
   tray.onQuit = () async {
+    // Data first and alone: if stopping the model server hangs, the words are
+    // already safely closed. The rest can go at once — none of it depends on
+    // the others, and serialising them only makes the wait longer.
     await StorageService.instance.close();
-    await TtsService.instance.stop();
-    await LlmLauncher.instance.stop();
-    await SingleInstance.release();
+    await Future.wait([
+      TtsService.instance.stop(),
+      LlmLauncher.instance.stop(),
+      SingleInstance.release(),
+    ]);
   };
   // The folder tells us the moment something lands, so the timer above is a
   // safety net rather than the way words arrive.
