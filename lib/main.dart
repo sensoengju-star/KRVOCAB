@@ -35,7 +35,7 @@ Future<void> main(List<String> args) async {
     exit(0);
   }
 
-  _startedHidden = args.contains(TrayService.hiddenFlag);
+  _startedAtLogin = args.contains(TrayService.startedAtLoginFlag);
 
   await windowManager.ensureInitialized();
   await StorageService.instance.init();
@@ -79,7 +79,13 @@ Future<void> _startTray() async {
   tray.onImport = () async => _backgroundImport();
   // Hiding is the moment nothing is being looked at: a good time to let the
   // model server go.
-  tray.onHide = () async => LlmLauncher.instance.stop();
+  tray.onHide = () async {
+    // Closing the window is often the last thing done before walking away or
+    // shutting the machine down. Get everything on disk now rather than
+    // trusting the 400 ms timer to win a race against a session ending.
+    await StorageService.instance.flushAll();
+    await LlmLauncher.instance.stop();
+  };
   tray.onQuit = () async {
     await StorageService.instance.close();
     await TtsService.instance.stop();
@@ -96,13 +102,15 @@ Future<void> _startTray() async {
 
   if (await tray.runInTray()) await tray.start();
 
-  // Launched by Windows at login: be present, not intrusive. Hide after the
-  // tray exists, so there is something to restore from.
-  if (_startedHidden) await tray.hide();
+  // Launched by Windows at login: come up in front. A window started behind
+  // everything else is easy to miss entirely, and a vocabulary app you do not
+  // see is a vocabulary app you do not use — being in view at the start of
+  // the day is the point of starting with Windows at all.
+  if (_startedAtLogin) await tray.show();
 }
 
-/// True when Windows started us at login rather than the user did.
-bool _startedHidden = false;
+/// True when Windows started us at login rather than a person did.
+bool _startedAtLogin = false;
 
 /// The timed import. Runs with no window on screen, so it says nothing and
 /// leaves its account in the import history instead.
@@ -233,6 +241,20 @@ class _MaldariAppState extends ConsumerState<MaldariApp>
     await StorageService.instance.close();
     await TtsService.instance.stop();
     await LlmLauncher.instance.stop();
+  }
+
+  /// Windows asking the app to exit — a session ending, most often.
+  ///
+  /// The tray makes this the likely shutdown path rather than an unusual one:
+  /// the window being closed no longer ends the process, so a machine going
+  /// down meets a running app. window_manager holds the window open on our
+  /// behalf, which could otherwise swallow the close entirely and leave the
+  /// OS to kill us; answering here means the data is closed properly first
+  /// and Windows is not kept waiting.
+  @override
+  Future<ui.AppExitResponse> didRequestAppExit() async {
+    await _shutdown();
+    return ui.AppExitResponse.exit;
   }
 
   @override

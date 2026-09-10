@@ -15,7 +15,7 @@ go  → matches 가다 too
 
 ---
 
-## The Shortcut — six actions
+## The Shortcut — seven actions
 
 **1. `Ask for Input`**
 
@@ -58,14 +58,33 @@ back as one result.
 > under its **›**, turning that off does the same thing and you can drop the
 > `(?i)`.
 
-**5. `Combine Text`**
+**5. `Count`**
 
-- Combine: the matches from step 4
-- Separator: **New Lines**
+- Count: **Items**
+- In: the **Matches** from step 4
 
-**6. `Show Result`**
+Counting the matches, rather than asking whether the text is empty, is what
+makes the next step reliable: Shortcuts compares numbers unambiguously, while
+"does this text have any value" treats an empty string inconsistently across
+versions.
 
-Shows the combined text.
+**6. `If`**
+
+- Condition: **Count** — **is** — `0`
+
+Inside the **If** (nothing found):
+
+- `Show Result` with text: `No matches for ` then the **Provided Input**
+  variable
+
+Inside **Otherwise** (something found):
+
+- `Combine Text` — the **Matches** from step 4, separator **New Lines**
+- `Show Result` with the **Combined Text**
+
+An empty result is otherwise indistinguishable from the Shortcut failing, and
+"nothing found" is a real answer worth stating — it is how you decide whether
+to capture the word.
 
 Name it **Look up**, add it to the Home Screen.
 
@@ -81,8 +100,8 @@ line that contains it:
 - **서성이다** *(seoseongida)* — to pace about · 서성여요
 ```
 
-Nothing matches? You get an empty result, which means that word is not in your
-collection — itself useful before you capture it again.
+Nothing matches? You get **No matches for …**, which means the word is not in
+your collection — itself the useful answer, since it tells you to capture it.
 
 ---
 

@@ -68,12 +68,13 @@ class TrayService with TrayListener, WindowListener {
     }
   }
 
-  /// The argument a login-launched copy is given, so it can come up hidden.
+  /// The argument a login-launched copy is given, so it knows Windows started
+  /// it rather than a person did.
   ///
-  /// Starting with Windows and then throwing a window in your face every
-  /// morning would be its own kind of rude — the point is to be there, not to
-  /// be seen.
-  static const String hiddenFlag = '--tray';
+  /// The value stays `--tray` for compatibility: it is already written into
+  /// the registry entry of anyone who enabled autostart, and changing it
+  /// would silently stop that entry being recognised.
+  static const String startedAtLoginFlag = '--tray';
 
   bool _autostartReady = false;
 
@@ -82,7 +83,7 @@ class TrayService with TrayListener, WindowListener {
     launchAtStartup.setup(
       appName: 'Maldari',
       appPath: Platform.resolvedExecutable,
-      args: [hiddenFlag],
+      args: [startedAtLoginFlag],
     );
     _autostartReady = true;
   }

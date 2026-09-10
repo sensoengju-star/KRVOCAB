@@ -159,7 +159,7 @@ class _TraySettingsState extends State<TraySettings> {
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          'Starts hidden in the tray at login — no window.',
+                          'Opens at login, in front and ready.',
                           style: GoogleFonts.inter(
                             color: AppColors.mutedInk(context),
                             fontSize: 11.5,
