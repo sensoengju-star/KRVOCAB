@@ -391,7 +391,21 @@ class _BlockFlashcardState extends State<_BlockFlashcard>
     final back = _Face(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
+        mainAxisSize: MainAxisSize.min,
         children: [
+          // The block itself, so the answer is read against its question
+          // rather than as a sound floating on its own. Smaller than the
+          // front's 96px: once revealed, the sound is the thing being learned.
+          Text(
+            widget.block.block,
+            style: GoogleFonts.notoSerifKr(
+              color: AppColors.ink(context),
+              fontWeight: FontWeight.w500,
+              fontSize: 44,
+              height: 1.0,
+            ),
+          ),
+          const SizedBox(height: 18),
           Text(
             'SOUND',
             style: GoogleFonts.inter(
