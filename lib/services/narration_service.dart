@@ -198,6 +198,14 @@ class NarrationController extends ValueNotifier<NarrationState> {
     if (myRun != _run) return;
     value = value.copyWith(loading: false);
 
+    // Set per clip rather than once: the setting can change between
+    // sentences, and a story is played one file at a time.
+    try {
+      await _player.setVolume(await ElevenLabsService.instance.volume());
+    } catch (e) {
+      // A player that will not take a volume should still play the story.
+      debugPrint('[Narration] could not set volume: $e');
+    }
     await _player.play(DeviceFileSource(file.path));
 
     // Prefetch the next line while this one plays. Failures are swallowed:

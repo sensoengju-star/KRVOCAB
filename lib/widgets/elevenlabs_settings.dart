@@ -31,6 +31,7 @@ class _ElevenLabsSettingsState extends ConsumerState<ElevenLabsSettings> {
   int _cacheBytes = 0;
   double _speed = ElevenLabsService.defaultSpeed;
   double _stability = ElevenLabsService.defaultStability;
+  double _volume = ElevenLabsService.defaultVolume;
   List<({String id, String name})> _voices = const [];
 
   @override
@@ -52,12 +53,14 @@ class _ElevenLabsSettingsState extends ConsumerState<ElevenLabsSettings> {
     _voice.text = await svc.voiceId();
     final rate = await svc.speed();
     final steadiness = await svc.stability();
+    final level = await svc.volume();
     final size = await svc.cacheSize();
     if (mounted) {
       setState(() {
         _cacheBytes = size;
         _speed = rate;
         _stability = steadiness;
+        _volume = level;
       });
     }
   }
@@ -211,6 +214,14 @@ class _ElevenLabsSettingsState extends ConsumerState<ElevenLabsSettings> {
             onSettled: (v) => ElevenLabsService.instance.save(speed: v),
           ),
           const SizedBox(height: 4),
+          _VolumeSlider(
+            value: _volume,
+            onChanged: (v) => setState(() => _volume = v),
+            onSettled: (v) async {
+              await ElevenLabsService.instance.save(volume: v);
+            },
+          ),
+          const SizedBox(height: 14),
           _StabilitySlider(
             value: _stability,
             onChanged: (v) => setState(() => _stability = v),
@@ -400,6 +411,72 @@ class _ModelPickerState extends State<_ModelPicker> {
 /// Pace for the narration voice. ElevenLabs treats this as a voice setting
 /// rather than a playback rate, so the model performs the line more slowly
 /// instead of the audio being stretched.
+class _VolumeSlider extends StatelessWidget {
+  const _VolumeSlider({
+    required this.value,
+    required this.onChanged,
+    required this.onSettled,
+  });
+
+  final double value;
+  final ValueChanged<double> onChanged;
+
+  /// Saved when the drag ends, not on every tick.
+  final ValueChanged<double> onSettled;
+
+  @override
+  Widget build(BuildContext context) {
+    final percent = (value * 100).round();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Text(
+              'Narration volume',
+              style: GoogleFonts.inter(
+                color: AppColors.ink(context),
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              '$percent%',
+              style: GoogleFonts.inter(
+                color: AppColors.antiqueGold,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+        Slider(
+          value: value,
+          min: 0,
+          max: 1,
+          divisions: 20,
+          activeColor: AppColors.antiqueGold,
+          onChanged: onChanged,
+          onChangeEnd: onSettled,
+        ),
+        Text(
+          // Saying so beats a slider that appears to promise more than it
+          // can give: 100% is as loud as any app gets, and the machine's own
+          // volume is the ceiling above it.
+          'Narration only — word pronunciation is unaffected. 100% is full '
+          'volume for this app; the system volume sets the ceiling.',
+          style: GoogleFonts.inter(
+            color: AppColors.mutedInk(context),
+            fontSize: 11.5,
+            height: 1.45,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _SpeedSlider extends StatelessWidget {
   const _SpeedSlider({
     required this.value,

@@ -25,6 +25,7 @@ class ElevenLabsService {
   static const _kVoiceId = 'eleven_voice_id';
   static const _kModelId = 'eleven_model_id';
   static const _kSpeed = 'eleven_speed';
+  static const _kVolume = 'eleven_volume';
   static const _kStability = 'eleven_stability';
 
   /// ElevenLabs accepts 0.7–1.2, where below 1.0 is slower. The default is
@@ -33,6 +34,19 @@ class ElevenLabsService {
   static const double minSpeed = 0.7;
   static const double maxSpeed = 1.2;
   static const double defaultSpeed = 0.82;
+
+  /// Playback level for narration, 0–1.
+  ///
+  /// Not an API parameter — the clips come back at a fixed level and this is
+  /// applied by the player. Full by default, because attenuating is the only
+  /// direction available: 1.0 is the loudest a player can be, and the machine
+  /// volume is the ceiling above it.
+  static const double defaultVolume = 1.0;
+
+  Future<double> volume() async {
+    final p = await SharedPreferences.getInstance();
+    return (p.getDouble(_kVolume) ?? defaultVolume).clamp(0.0, 1.0);
+  }
 
   /// How consistent the delivery is between requests. High on purpose: the
   /// low end lets the model reinterpret each line, which is what makes a
@@ -91,6 +105,7 @@ class ElevenLabsService {
     String? modelId,
     double? speed,
     double? stability,
+    double? volume,
   }) async {
     final p = await SharedPreferences.getInstance();
     if (apiKey != null) await p.setString(_kApiKey, apiKey.trim());
@@ -101,6 +116,9 @@ class ElevenLabsService {
     }
     if (stability != null) {
       await p.setDouble(_kStability, stability.clamp(0.0, 1.0));
+    }
+    if (volume != null) {
+      await p.setDouble(_kVolume, volume.clamp(0.0, 1.0));
     }
   }
 
