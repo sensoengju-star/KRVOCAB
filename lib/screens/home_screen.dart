@@ -9,11 +9,13 @@ import '../providers/vocab_provider.dart';
 import '../services/inbox_service.dart';
 import '../theme/app_colors.dart';
 import '../widgets/import_history_sheet.dart';
+import '../widgets/app_status_pill.dart';
 import '../widgets/data_safety_sheet.dart';
 import 'blocks_screen.dart';
 import 'examples_screen.dart';
 import 'grammar_screen.dart';
 import 'review_screen.dart';
+import 'study_time_screen.dart';
 import 'settings_screen.dart';
 import 'vocab_list_screen.dart';
 
@@ -26,6 +28,7 @@ class HomeScreen extends ConsumerWidget {
     'Stories',
     'Blocks',
     'Grammar',
+    'Study time',
   ];
 
   /// Shown under each English title in the header band.
@@ -35,6 +38,7 @@ class HomeScreen extends ConsumerWidget {
     '이야기',
     '블록',
     '문법',
+    '공부 시간',
   ];
 
   @override
@@ -120,6 +124,10 @@ class HomeScreen extends ConsumerWidget {
             ),
           ),
           actions: [
+            // Whether the app is fit to rely on right now. First in the row,
+            // because it qualifies everything else up here.
+            const Center(child: AppStatusPill()),
+            const SizedBox(width: 10),
             // Importing is a thing you do, not a thing you configure, so it
             // lives in the header rather than three taps deep in Settings.
             _CircleAction(
@@ -168,6 +176,7 @@ class HomeScreen extends ConsumerWidget {
             ExamplesScreen(),
             BlocksScreen(),
             GrammarScreen(),
+            StudyTimeScreen(),
           ],
         ),
       ),
@@ -238,6 +247,13 @@ class _BottomNav extends StatelessWidget {
                   label: '문법',
                   selected: index == 4,
                   onTap: () => onChanged(4),
+                ),
+                _NavItem(
+                  icon: Icons.timer_outlined,
+                  activeIcon: Icons.timer,
+                  label: '시간',
+                  selected: index == 5,
+                  onTap: () => onChanged(5),
                 ),
               ],
             ),

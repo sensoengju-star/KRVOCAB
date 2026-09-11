@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -17,6 +18,7 @@ import 'providers/vocab_provider.dart';
 import 'services/inbox_service.dart';
 import 'services/single_instance.dart';
 import 'services/storage_service.dart';
+import 'services/study_time_service.dart';
 import 'services/tray_service.dart';
 import 'services/vocab_export_service.dart';
 import 'services/tts_service.dart';
@@ -39,6 +41,15 @@ Future<void> main(List<String> args) async {
 
   await windowManager.ensureInitialized();
   await StorageService.instance.init();
+
+  // Study time. Loads the week, prunes anything older, and starts the clock —
+  // which only runs while the window is in front and someone is using it.
+  await StudyTimeService.instance.start();
+  // A key press anywhere is activity, whatever has focus.
+  HardwareKeyboard.instance.addHandler((_) {
+    StudyTimeService.instance.noteActivity();
+    return false;
+  });
 
   // Front-load the three runtime-fetched fonts in parallel with the rest of
   // startup. They're cached to disk after the first run; pre-warming them
@@ -83,8 +94,13 @@ Future<void> _startTray() async {
   tray.onImport = () async => _backgroundImport();
   // Hiding is the moment nothing is being looked at: a good time to let the
   // model server go.
-  tray.onShow = () async => LlmLauncher.instance.ensureRunning();
+  tray.onShow = () async {
+    StudyTimeService.instance.setForeground(true);
+    await LlmLauncher.instance.ensureRunning();
+  };
   tray.onHide = () async {
+    // Hidden in the tray is not studying. Stop the clock before anything else.
+    StudyTimeService.instance.setForeground(false);
     // Closing the window is often the last thing done before walking away or
     // shutting the machine down. Get everything on disk now rather than
     // trusting the 400 ms timer to win a race against a session ending.
@@ -97,6 +113,7 @@ Future<void> _startTray() async {
     // the others, and serialising them only makes the wait longer.
     await StorageService.instance.close();
     await Future.wait([
+      StudyTimeService.instance.flush(),
       TtsService.instance.stop(),
       LlmLauncher.instance.stop(),
       SingleInstance.release(),
@@ -205,7 +222,12 @@ class _MaldariAppState extends ConsumerState<MaldariApp>
 
     // Words captured on the phone land here on the way in. After the first
     // frame, so a slow or cloud-backed folder can never hold up startup.
-    WidgetsBinding.instance.addPostFrameCallback((_) => _importInbox());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      // The window has just appeared in front of you: that is foreground,
+      // whether or not a lifecycle event bothers to say so.
+      StudyTimeService.instance.setForeground(true);
+      _importInbox();
+    });
 
     // And again shortly after. A file the phone saved a moment ago may still
     // be on its way down when the app opens, and the sync client gives no
@@ -249,6 +271,7 @@ class _MaldariAppState extends ConsumerState<MaldariApp>
     // Data first: if killing the model server hangs (or the OS pulls the rug
     // mid-shutdown), the user's words are already safely on disk.
     await StorageService.instance.close();
+    await StudyTimeService.instance.flush();
     await TtsService.instance.stop();
     await LlmLauncher.instance.stop();
   }
@@ -269,6 +292,9 @@ class _MaldariAppState extends ConsumerState<MaldariApp>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Only a focused, visible window counts as study time. Switching to
+    // another window stops the clock just as surely as hiding does.
+    StudyTimeService.instance.setForeground(state == AppLifecycleState.resumed);
     if (state == AppLifecycleState.detached) {
       unawaited(_shutdown());
       return;
@@ -312,6 +338,16 @@ class _MaldariAppState extends ConsumerState<MaldariApp>
       darkTheme: buildDarkAppTheme(),
       themeMode: mode,
       scaffoldMessengerKey: _messengerKey,
+      // Every mouse move, click and scroll anywhere in the app is activity.
+      // Hover counts: reading a story while the pointer drifts over it is
+      // studying, and the idle cut-off would otherwise stop the clock on it.
+      builder: (context, child) => Listener(
+        behavior: HitTestBehavior.translucent,
+        onPointerDown: (_) => StudyTimeService.instance.noteActivity(),
+        onPointerHover: (_) => StudyTimeService.instance.noteActivity(),
+        onPointerSignal: (_) => StudyTimeService.instance.noteActivity(),
+        child: child,
+      ),
       home: _seenOnboarding == null
           ? const _Splash()
           : (_seenOnboarding!
