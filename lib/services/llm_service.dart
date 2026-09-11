@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -590,6 +591,98 @@ class LlmService {
 
   static const int _maxAvoidList = 6;
 
+  /// Intermediate grammar the review sentences are built around.
+  ///
+  /// Describing the level in the prompt was not enough: left to itself the
+  /// model reaches for -는데 almost every time, so every sentence came out the
+  /// same easy shape — short clause, -는데, short clause. Naming the pattern
+  /// in each request is what actually moves it, and drawing it at random is
+  /// what keeps the sentences from all sounding alike.
+  static const List<String> _grammarPatterns = [
+    '-느라고 (because I was busy doing…)',
+    '-는 바람에 (because of an unexpected cause)',
+    '-(으)ㄹ수록 (the more…, the more…)',
+    '-더라도 (even if…)',
+    '-는 대신에 (instead of…)',
+    '-(으)ㄴ 채로 (while still in the state of…)',
+    '-다 보니 (after doing it for a while, it turned out…)',
+    '-는 김에 (while I was at it…)',
+    '-(으)ㄹ 뿐만 아니라 (not only… but also…)',
+    '-기는 하지만 (it is true that…, but…)',
+    '-(으)ㄹ 만큼 (to the extent that…)',
+    '-는 탓에 (because of — with a bad result)',
+    '-고 나서야 (only after…)',
+    '-(으)ㄹ 텐데 (it would surely…, so…)',
+    '-(으)ㄴ/는 척하다 (to pretend to…)',
+    '-게 되다 (to end up / come to…)',
+    '-아/어 봤자 (even if you…, it is no use)',
+    '-던 (that used to… — recollection)',
+    '-(으)ㄹ 뻔하다 (almost…)',
+    '-기 마련이다 (it is bound to…)',
+    '-는 데다가 (on top of…)',
+    '-(으)ㄹ까 봐 (for fear that…)',
+  ];
+
+  /// Where the sentence takes place, drawn at random for the same reason as
+  /// the grammar: asked only for "a specific situation", the model set nearly
+  /// every sentence at a project deadline.
+  static const List<String> _situations = [
+    'a visit to the doctor or pharmacy',
+    'moving house or dealing with a landlord',
+    'a neighbour',
+    'the subway, a bus or a taxi',
+    'cooking or trying a recipe',
+    'a childhood memory',
+    'a pet',
+    'shopping, a refund or a delivery',
+    'a hobby or a class outside work',
+    'something that went wrong while travelling',
+    'a family gathering or a relative',
+    'exercise or trying to stay healthy',
+    'a job interview or changing jobs',
+    'something in the news',
+    'saving money or an unexpected expense',
+    'advice from a friend or a senior',
+    'a misunderstanding between two people',
+    'a school exam or studying for a test',
+    'a wedding, a birthday or a celebration',
+    'a phone call or a message that changed plans',
+    'a film, a book or a drama',
+    'a quarrel and making up afterwards',
+    'a first day somewhere new',
+    'a small accident or a close call',
+  ];
+
+  final Random _random = Random();
+
+  /// Two different patterns, so the model can take whichever suits the word.
+  /// One forced pattern would sometimes make it bend the sentence into
+  /// something no one would say.
+  List<String> _pickPatterns() {
+    final pool = List<String>.of(_grammarPatterns)..shuffle(_random);
+    return pool.take(2).toList();
+  }
+
+  /// Whether [sentence] really contains [word], going by the form the model
+  /// says it used.
+  ///
+  /// The model will sometimes swap the word for a synonym — 매우 came back as
+  /// 정말 — and a sentence without the word teaches nothing about it. The form
+  /// must appear in the sentence and begin with the same consonant as the
+  /// word. Whole first syllables would be too strict: irregular conjugations
+  /// change the first syllable (모르다 → 몰라요, 듣다 → 들어요) but never its
+  /// first consonant.
+  static bool _containsWord(String sentence, String used, String word) {
+    if (used.isEmpty || word.isEmpty || !sentence.contains(used)) return false;
+    int? lead(String s) {
+      final c = s.runes.first;
+      return (c >= 0xAC00 && c <= 0xD7A3) ? (c - 0xAC00) ~/ 588 : null;
+    }
+
+    final a = lead(word), b = lead(used);
+    return a == null || b == null || a == b;
+  }
+
   /// Two sentences count as the same when only spacing or punctuation differs.
   static final RegExp _exampleNoise = RegExp(r'[\s.,!?~`-]');
 
@@ -602,8 +695,9 @@ class LlmService {
   /// No sentence is served twice in a session: earlier sentences for the word
   /// go into the prompt as an avoid-list, and anything that comes back
   /// matching one already seen is rejected and asked for again at a higher
-  /// temperature. Returns null when three tries all come back repeats —
-  /// better no sentence than the same one over again.
+  /// temperature. The same goes for a sentence that quietly left the word
+  /// out. Returns null when three tries all fail — better no sentence than
+  /// the same one over again.
   Future<({String korean, String english, String usedForm})?>
       generateOneExample(String word) async {
     final config = await LlmConfig.load();
@@ -614,6 +708,26 @@ class LlmService {
     const temperatures = [0.5, 0.85, 1.05];
 
     for (final temperature in temperatures) {
+      final patterns = _pickPatterns();
+      final situation = _situations[_random.nextInt(_situations.length)];
+      final already = avoid.isEmpty
+          ? ''
+          : '\n\nYou have already written the sentences below for this '
+              'word. Write a DIFFERENT one: a new situation, a different '
+              'subject, a different ending.\n'
+              '${avoid.map((s) => '- $s').join('\n')}';
+      final ask = 'Target word: "$word"\n\n'
+          'Grammar — build the sentence around ONE of these, whichever fits '
+          'the word more naturally:\n'
+          '${patterns.map((p) => '- $p').join('\n')}\n\n'
+          'Situation: $situation. If the word cannot sit naturally there, '
+          'choose another situation — the word matters more.'
+          '$already\n\n'
+          // Last on purpose. With grammar and a situation to juggle, the
+          // model left the word itself out of about a third of its tries;
+          // the final line of a request is the one it holds on to best.
+          'The sentence MUST contain "$word" itself, conjugated as needed. '
+          'Check this before you reply.';
       final body = jsonEncode({
         'model': config.modelAlias,
         'stream': false,
@@ -630,40 +744,36 @@ class LlmService {
           {
             'role': 'system',
             'content':
-                'You are a Korean tutor for INTERMEDIATE learners (TOPIK '
+                'You are a Korean tutor for intermediate learners (TOPIK '
                 '3-4). Write ONE example sentence that uses the target word '
-                'the way a native speaker actually would — natural, '
-                'everyday Korean, not a simplified textbook sentence. '
-                'Conjugate or inflect the word as the sentence requires and '
-                'end in the everyday polite 해요체 style (e.g. -아요/-어요). '
-                'Do NOT leave a verb or adjective in its -다 dictionary form. '
-                'Make it a FULL sentence with real context: about 12 to 22 '
-                '어절, with at least two clauses — but still ONE sentence '
-                'with one full stop, never two. Reach for intermediate '
-                'grammar where it fits naturally — connectives such as '
-                '-(으)ㄴ/는데, -기 때문에, -(으)ㄹ 때, -다가, -도록, -더니 or '
-                '-(으)면서; noun-modifying clauses (-(으)ㄴ/는/(으)ㄹ + noun); '
-                'endings such as -게 되다, -(으)ㄹ 수 있다, -는 것 같다 or '
-                'reported speech with -다고 하다. Use ordinary adult '
-                'vocabulary rather than restricting yourself to beginner '
-                'words — even when the target word itself is basic, the '
-                'sentence around it should read at an intermediate level. '
-                'Do not force several of these patterns into one sentence; '
-                'one or two used naturally is the goal. Reply with '
+                'the way a native speaker would in real life — natural, not '
+                'a simplified textbook sentence. Conjugate or inflect the '
+                'word as the sentence requires and end in the everyday '
+                'polite 해요체 style (e.g. -아요/-어요). Do NOT leave a verb or '
+                'adjective in its -다 dictionary form. Make it a FULL sentence '
+                'with real context: about 14 to 22 어절, with at least two '
+                'clauses — but still ONE sentence with one full stop, never '
+                'two. The request names grammar patterns: build the sentence '
+                'around one of them, used correctly and naturally. Write as '
+                'an educated adult speaks: choose the precise word for each '
+                'idea, including Sino-Korean ones (e.g. 상황, 경험, 결국, 예상, '
+                '영향, 부담, 준비), rather than the easiest word every time. '
+                'Avoid the beginner defaults — no 너무 or 정말 as filler, and '
+                'not the stock scenes of weekend plans with friends or the '
+                'weather. The request also names a situation: set the '
+                'sentence there, with concrete details. The target word '
+                'itself must appear in the sentence — never swap it for a '
+                'synonym. Reply with '
                 'ONLY a JSON object: {"korean":"...","english":"...",'
                 '"used":"..."}. The "used" field is the EXACT surface form of '
-                'the target word as it literally appears in your "korean" '
+                'the TARGET WORD — not the grammar pattern — as it literally '
+                'appears in your "korean" '
                 'sentence (the conjugated substring, copied verbatim — e.g. '
                 'if you wrote "갔어요" put "갔어요").',
           },
           {
             'role': 'user',
-            'content': avoid.isEmpty
-                ? 'Target word: "$word".'
-                : 'Target word: "$word".\n\nYou have already written the '
-                    'sentences below for this word. Write a DIFFERENT one: a '
-                    'new situation, a different subject, a different ending.\n'
-                    '${avoid.map((s) => '- $s').join('\n')}',
+            'content': ask,
           }
         ],
       });
@@ -685,7 +795,7 @@ class LlmService {
         final ko = (parsed['korean'] ?? '').toString().trim();
         final en = (parsed['english'] ?? '').toString().trim();
         final used = (parsed['used'] ?? '').toString().trim();
-        if (ko.isEmpty) continue;
+        if (ko.isEmpty || !_containsWord(ko, used, word)) continue;
 
         // add() is the duplicate check and the record in one move.
         if (!_examplesThisSession.add(_exampleKey(ko))) continue;
