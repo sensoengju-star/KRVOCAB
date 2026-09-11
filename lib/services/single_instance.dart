@@ -18,6 +18,10 @@ class SingleInstance {
 
   /// Arbitrary high port. Loopback only, so nothing outside this machine can
   /// reach it.
+  ///
+  /// Also hard-coded in windows/runner/main.cpp, which pokes it from native
+  /// code before Flutter starts — that is the fast path for a second launch.
+  /// This Dart-side claim stays as the fallback. Change one, change both.
   static const int _port = 45731;
 
   static ServerSocket? _server;
