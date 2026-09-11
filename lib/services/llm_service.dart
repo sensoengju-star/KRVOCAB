@@ -26,11 +26,9 @@ class LlmConfig {
   /// Every request path goes through here, which makes it the one place the
   /// model server has to be running by.
   ///
-  /// It is started on demand rather than at launch: the app lives in the tray
-  /// now, and starting a model server for someone who opened the window to
-  /// add a single word would keep gigabytes resident all day. The first
-  /// request pays the load time; the rest find it warm, and hiding the window
-  /// lets it go again.
+  /// The server is started when the window opens, so it is normally warm by
+  /// the time anything asks; this is the safety net for a request that
+  /// arrives first. Hiding the window to the tray lets it go again.
   static Future<LlmConfig> load() async {
     final p = await SharedPreferences.getInstance();
     final config = LlmConfig(
@@ -632,16 +630,26 @@ class LlmService {
           {
             'role': 'system',
             'content':
-                'You are a Korean tutor for TOPIK I-II learners. Write ONE '
-                'natural-sounding example sentence that uses the target word, '
-                'conjugating or inflecting it naturally as the sentence '
-                'requires — use the everyday polite 해요체 style (e.g. '
-                '-아요/-어요). Do NOT leave a verb or adjective in its -다 '
-                'dictionary form. Make it a FULL sentence with real context: '
-                'about 12 to 20 어절, built from TWO clauses joined by a '
-                'connective such as -고, -아서/-어서, -지만, -는데 or -(으)면. A '
-                'three-word fragment teaches nothing about how the word is '
-                'used. Keep every word in it at TOPIK I-II level. Reply with '
+                'You are a Korean tutor for INTERMEDIATE learners (TOPIK '
+                '3-4). Write ONE example sentence that uses the target word '
+                'the way a native speaker actually would — natural, '
+                'everyday Korean, not a simplified textbook sentence. '
+                'Conjugate or inflect the word as the sentence requires and '
+                'end in the everyday polite 해요체 style (e.g. -아요/-어요). '
+                'Do NOT leave a verb or adjective in its -다 dictionary form. '
+                'Make it a FULL sentence with real context: about 12 to 22 '
+                '어절, with at least two clauses — but still ONE sentence '
+                'with one full stop, never two. Reach for intermediate '
+                'grammar where it fits naturally — connectives such as '
+                '-(으)ㄴ/는데, -기 때문에, -(으)ㄹ 때, -다가, -도록, -더니 or '
+                '-(으)면서; noun-modifying clauses (-(으)ㄴ/는/(으)ㄹ + noun); '
+                'endings such as -게 되다, -(으)ㄹ 수 있다, -는 것 같다 or '
+                'reported speech with -다고 하다. Use ordinary adult '
+                'vocabulary rather than restricting yourself to beginner '
+                'words — even when the target word itself is basic, the '
+                'sentence around it should read at an intermediate level. '
+                'Do not force several of these patterns into one sentence; '
+                'one or two used naturally is the goal. Reply with '
                 'ONLY a JSON object: {"korean":"...","english":"...",'
                 '"used":"..."}. The "used" field is the EXACT surface form of '
                 'the target word as it literally appears in your "korean" '
