@@ -20,6 +20,7 @@ import '../theme/app_colors.dart';
 import '../widgets/elevenlabs_settings.dart';
 import '../widgets/gold_button.dart';
 import '../widgets/inbox_settings.dart';
+import '../widgets/settings_card.dart';
 import '../widgets/tray_settings.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
@@ -261,7 +262,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ],
             ),
           ),
-          const GoldDiamondDivider(),
+          const SizedBox(height: 18),
         ],
         _section(context, 'Appearance'),
         _Tile(
@@ -273,7 +274,38 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             onChanged: (_) => ref.read(themeModeProvider.notifier).toggle(),
           ),
         ),
-        const GoldDiamondDivider(),
+        const SizedBox(height: 18),
+
+        _section(context, 'Review'),
+        _Tile(
+          title: 'Learning only',
+          subtitle:
+              'Restrict the review deck to words still marked as Learning '
+              '(excludes Reinforced words)',
+          trailing: Switch(
+            value: learningOnly,
+            activeColor: AppColors.antiqueGold,
+            onChanged: (v) {
+              ref.read(learningOnlyProvider.notifier).set(v);
+              // Mutually exclusive with the "Include …" toggles.
+              if (v) ref.read(includeReinforcementProvider.notifier).set(false);
+            },
+          ),
+        ),
+        _Tile(
+          title: 'Include reinforced words',
+          subtitle: 'Show words marked for reinforcement in the review deck',
+          trailing: Switch(
+            value: includeReinforcement,
+            activeColor: AppColors.antiqueGold,
+            onChanged: (v) {
+              ref.read(includeReinforcementProvider.notifier).set(v);
+              // Mutually exclusive with "Learning only".
+              if (v) ref.read(learningOnlyProvider.notifier).set(false);
+            },
+          ),
+        ),
+        const SizedBox(height: 18),
 
         _section(context, 'Pronunciation'),
         if (!TtsService.instance.isKoreanAvailable)
@@ -350,49 +382,21 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
           ),
         ),
-        const GoldDiamondDivider(),
+        const SizedBox(height: 18),
 
         _section(context, 'Words from your phone'),
         const InboxSettings(),
+        const SizedBox(height: 18),
+
+        _section(context, 'Running in the background'),
         const TraySettings(),
-        const GoldDiamondDivider(),
+        const SizedBox(height: 18),
 
         _section(context, 'Story narration'),
         const ElevenLabsSettings(),
-        const GoldDiamondDivider(),
+        const SizedBox(height: 18),
 
-        _section(context, 'Review'),
-        _Tile(
-          title: 'Learning only',
-          subtitle:
-              'Restrict the review deck to words still marked as Learning '
-              '(excludes Reinforced words)',
-          trailing: Switch(
-            value: learningOnly,
-            activeColor: AppColors.antiqueGold,
-            onChanged: (v) {
-              ref.read(learningOnlyProvider.notifier).set(v);
-              // Mutually exclusive with the "Include …" toggles.
-              if (v) ref.read(includeReinforcementProvider.notifier).set(false);
-            },
-          ),
-        ),
-        _Tile(
-          title: 'Include reinforced words',
-          subtitle: 'Show words marked for reinforcement in the review deck',
-          trailing: Switch(
-            value: includeReinforcement,
-            activeColor: AppColors.antiqueGold,
-            onChanged: (v) {
-              ref.read(includeReinforcementProvider.notifier).set(v);
-              // Mutually exclusive with "Learning only".
-              if (v) ref.read(learningOnlyProvider.notifier).set(false);
-            },
-          ),
-        ),
-        const GoldDiamondDivider(),
-
-        _section(context, 'LLM Server'),
+        _section(context, 'Model server'),
         _Tile(
           title: 'Status',
           subtitle: _serverUp
@@ -500,7 +504,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
           ],
         ),
-        const GoldDiamondDivider(),
+        const SizedBox(height: 18),
 
         _section(context, 'Data'),
         Row(
@@ -576,14 +580,7 @@ class _Tile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      margin: const EdgeInsets.symmetric(vertical: 4),
-      decoration: BoxDecoration(
-        color: AppColors.surface(context),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.hairline(context)),
-      ),
+    return SettingsCard(
       child: Row(
         children: [
           Expanded(

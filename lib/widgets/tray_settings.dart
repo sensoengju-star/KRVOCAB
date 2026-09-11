@@ -4,6 +4,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../services/tray_service.dart';
 import '../services/vocab_export_service.dart';
 import '../theme/app_colors.dart';
+import 'settings_card.dart';
 
 /// Whether Maldari keeps running after its window is closed, and how often it
 /// looks for words while it does.
@@ -47,14 +48,7 @@ class _TraySettingsState extends State<TraySettings> {
   Widget build(BuildContext context) {
     if (_loading) return const SizedBox(height: 8);
 
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 4),
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
-      decoration: BoxDecoration(
-        color: AppColors.surface(context),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.hairline(context)),
-      ),
+    return SettingsCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [

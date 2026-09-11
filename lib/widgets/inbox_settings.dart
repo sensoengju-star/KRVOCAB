@@ -10,6 +10,7 @@ import '../services/inbox_service.dart';
 import '../theme/app_colors.dart';
 import 'gold_button.dart';
 import 'import_history_sheet.dart';
+import 'settings_card.dart';
 
 /// Settings for the phone inbox: the folder to watch, the key used to define
 /// what turns up in it, and a way to pull it in on demand.
@@ -136,14 +137,7 @@ class _InboxSettingsState extends ConsumerState<InboxSettings> {
   Widget build(BuildContext context) {
     if (_loading) return const SizedBox(height: 8);
 
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 4),
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-      decoration: BoxDecoration(
-        color: AppColors.surface(context),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.hairline(context)),
-      ),
+    return SettingsCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
