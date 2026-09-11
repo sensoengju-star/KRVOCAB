@@ -667,14 +667,23 @@ class _AddBlockSheetState extends ConsumerState<_AddBlockSheet> {
               autofocus: true,
               onChanged: _onBlockChanged,
               textAlign: TextAlign.center,
+              textAlignVertical: TextAlignVertical.center,
               style: GoogleFonts.notoSerifKr(
                 fontSize: 40,
                 fontWeight: FontWeight.w500,
                 color: AppColors.ink(context),
               ),
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 labelText: 'Block (한글)',
                 hintText: '작',
+                // The hint has to wear the input's own style. Left to the
+                // theme it renders at body size on a different baseline, so it
+                // looks both tiny and adrift inside a line box built for 40px.
+                hintStyle: GoogleFonts.notoSerifKr(
+                  fontSize: 40,
+                  fontWeight: FontWeight.w500,
+                  color: AppColors.mutedInk(context).withValues(alpha: 0.35),
+                ),
               ),
             ),
             const SizedBox(height: 16),
@@ -682,14 +691,20 @@ class _AddBlockSheetState extends ConsumerState<_AddBlockSheet> {
               controller: _roman,
               onChanged: (_) => _romanEdited = true,
               textAlign: TextAlign.center,
+              textAlignVertical: TextAlignVertical.center,
               style: GoogleFonts.inter(
                 fontSize: 22,
                 color: AppColors.deepGold,
                 fontStyle: FontStyle.italic,
               ),
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 labelText: 'Sound (romanization)',
                 hintText: 'jak',
+                hintStyle: GoogleFonts.inter(
+                  fontSize: 22,
+                  fontStyle: FontStyle.italic,
+                  color: AppColors.deepGold.withValues(alpha: 0.35),
+                ),
               ),
             ),
             const SizedBox(height: 16),
