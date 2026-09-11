@@ -64,6 +64,15 @@ class _BlocksScreenState extends ConsumerState<BlocksScreen> {
     );
   }
 
+  void _openEdit(BlockEntry block) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _AddBlockSheet(existing: block),
+    );
+  }
+
   void _openSearch() {
     showModalBottomSheet(
       context: context,
@@ -159,6 +168,20 @@ class _BlocksScreenState extends ConsumerState<BlocksScreen> {
                               child: Padding(
                                 padding: const EdgeInsets.all(4),
                                 child: Icon(Icons.search,
+                                    size: 16,
+                                    color: AppColors.mutedInk(context)),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Tooltip(
+                            message: 'Edit this block',
+                            child: InkWell(
+                              onTap: () => _openEdit(block),
+                              borderRadius: BorderRadius.circular(20),
+                              child: Padding(
+                                padding: const EdgeInsets.all(4),
+                                child: Icon(Icons.edit_outlined,
                                     size: 16,
                                     color: AppColors.mutedInk(context)),
                               ),
@@ -388,6 +411,35 @@ class _BlockFlashcardState extends State<_BlockFlashcard>
               letterSpacing: 1.5,
             ),
           ),
+          if (widget.block.definition.trim().isNotEmpty) ...[
+            const SizedBox(height: 22),
+            Text(
+              'MEANING',
+              style: GoogleFonts.inter(
+                color: AppColors.antiqueGold,
+                fontWeight: FontWeight.w600,
+                fontSize: 10,
+                letterSpacing: 3.0,
+              ),
+            ),
+            const SizedBox(height: 8),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
+              child: Text(
+                widget.block.definition,
+                textAlign: TextAlign.center,
+                maxLines: 4,
+                overflow: TextOverflow.ellipsis,
+                // Korean-capable face: a definition is as likely to say
+                // 學 or 학생 as it is to say "study".
+                style: GoogleFonts.notoSerifKr(
+                  color: AppColors.ink(context),
+                  fontSize: 17,
+                  height: 1.5,
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -444,7 +496,10 @@ class _Face extends StatelessWidget {
 /// Add-block bottom sheet. The romanization auto-fills from the typed block
 /// (and can still be overridden by hand).
 class _AddBlockSheet extends ConsumerStatefulWidget {
-  const _AddBlockSheet();
+  const _AddBlockSheet({this.existing});
+
+  /// When set, the sheet edits this block instead of adding a new one.
+  final BlockEntry? existing;
 
   @override
   ConsumerState<_AddBlockSheet> createState() => _AddBlockSheetState();
@@ -453,13 +508,31 @@ class _AddBlockSheet extends ConsumerStatefulWidget {
 class _AddBlockSheetState extends ConsumerState<_AddBlockSheet> {
   final _block = TextEditingController();
   final _roman = TextEditingController();
+  final _definition = TextEditingController();
   bool _romanEdited = false;
   bool _saving = false;
+
+  bool get _editing => widget.existing != null;
+
+  @override
+  void initState() {
+    super.initState();
+    final e = widget.existing;
+    if (e != null) {
+      _block.text = e.block;
+      _roman.text = e.roman;
+      _definition.text = e.definition;
+      // The sound on record was chosen, possibly by hand; editing the block
+      // must not quietly overwrite it with a fresh auto-fill.
+      _romanEdited = true;
+    }
+  }
 
   @override
   void dispose() {
     _block.dispose();
     _roman.dispose();
+    _definition.dispose();
     super.dispose();
   }
 
@@ -483,8 +556,10 @@ class _AddBlockSheetState extends ConsumerState<_AddBlockSheet> {
     if (roman.isEmpty) roman = Hangul.romanize(block);
 
     // Duplicate warning — same block already in the collection.
-    final dupes =
-        ref.read(blocksProvider).where((b) => b.block.trim() == block).toList();
+    final dupes = ref
+        .read(blocksProvider)
+        .where((b) => b.block.trim() == block && b.id != widget.existing?.id)
+        .toList();
     if (dupes.isNotEmpty) {
       final addAnyway = await showDialog<bool>(
         context: context,
@@ -513,15 +588,26 @@ class _AddBlockSheetState extends ConsumerState<_AddBlockSheet> {
     }
 
     setState(() => _saving = true);
+    final definition = _definition.text.trim();
     try {
-      await ref.read(blocksProvider.notifier).add(
-            BlockEntry(
-              id: 'b-${DateTime.now().millisecondsSinceEpoch}',
+      final existing = widget.existing;
+      if (existing != null) {
+        await ref.read(blocksProvider.notifier).update(existing.copyWith(
               block: block,
               roman: roman,
-              dateAdded: DateTime.now(),
-            ),
-          );
+              definition: definition,
+            ));
+      } else {
+        await ref.read(blocksProvider.notifier).add(
+              BlockEntry(
+                id: 'b-${DateTime.now().millisecondsSinceEpoch}',
+                block: block,
+                roman: roman,
+                dateAdded: DateTime.now(),
+                definition: definition,
+              ),
+            );
+      }
       if (!mounted) return;
       Navigator.pop(context);
     } catch (err) {
@@ -560,7 +646,7 @@ class _AddBlockSheetState extends ConsumerState<_AddBlockSheet> {
               ),
             ),
             const SizedBox(height: 16),
-            Text('Add a block',
+            Text(_editing ? 'Edit block' : 'Add a block',
                 style: GoogleFonts.playfairDisplay(
                   fontSize: 22,
                   color: AppColors.ink(context),
@@ -606,6 +692,23 @@ class _AddBlockSheetState extends ConsumerState<_AddBlockSheet> {
                 hintText: 'jak',
               ),
             ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _definition,
+              minLines: 2,
+              maxLines: 4,
+              textCapitalization: TextCapitalization.sentences,
+              style: GoogleFonts.notoSerifKr(
+                fontSize: 15,
+                height: 1.5,
+                color: AppColors.ink(context),
+              ),
+              decoration: const InputDecoration(
+                labelText: 'Meaning (optional)',
+                hintText: 'e.g. 學 — study, learning · 학교, 학생, 대학',
+                alignLabelWithHint: true,
+              ),
+            ),
             const SizedBox(height: 24),
             GoldButton(
               label: _saving ? 'Saving…' : 'Save',
@@ -640,7 +743,10 @@ class _BlocksSearchSheetState extends ConsumerState<_BlocksSearchSheet> {
         : all
             .where((b) =>
                 b.block.toLowerCase().contains(q) ||
-                b.roman.toLowerCase().contains(q))
+                b.roman.toLowerCase().contains(q) ||
+                // Meaning is searchable too: once blocks carry one, "study"
+                // is as natural a way to find 학 as its sound is.
+                b.definition.toLowerCase().contains(q))
             .toList();
 
     final bottom = MediaQuery.of(context).viewInsets.bottom;
@@ -716,13 +822,40 @@ class _BlocksSearchSheetState extends ConsumerState<_BlocksSearchSheet> {
                             ),
                             const SizedBox(width: 14),
                             Expanded(
-                              child: Text(
-                                b.roman,
-                                style: GoogleFonts.inter(
-                                  color: AppColors.antiqueGold,
-                                  fontStyle: FontStyle.italic,
-                                  fontSize: 15,
-                                ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    b.roman,
+                                    style: GoogleFonts.inter(
+                                      color: AppColors.antiqueGold,
+                                      fontStyle: FontStyle.italic,
+                                      fontSize: 15,
+                                    ),
+                                  ),
+                                  if (b.definition.trim().isNotEmpty)
+                                    Text(
+                                      b.definition,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: GoogleFonts.notoSerifKr(
+                                        color: AppColors.mutedInk(context),
+                                        fontSize: 12.5,
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: 'Edit',
+                              visualDensity: VisualDensity.compact,
+                              icon: Icon(Icons.edit_outlined,
+                                  size: 18, color: AppColors.mutedInk(context)),
+                              onPressed: () => showModalBottomSheet(
+                                context: context,
+                                isScrollControlled: true,
+                                backgroundColor: Colors.transparent,
+                                builder: (_) => _AddBlockSheet(existing: b),
                               ),
                             ),
                             IconButton(

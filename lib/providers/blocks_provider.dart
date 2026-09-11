@@ -19,6 +19,13 @@ class BlocksNotifier extends StateNotifier<List<BlockEntry>> {
     _load();
   }
 
+  /// Replaces the block with the same id. Hive keys by id, so this is the
+  /// same write as [add]; the separate name is for the reader.
+  Future<void> update(BlockEntry entry) async {
+    await StorageService.instance.blocksBox.put(entry.id, entry);
+    _load();
+  }
+
   Future<void> delete(String id) async {
     await StorageService.instance.blocksBox.delete(id);
     _load();

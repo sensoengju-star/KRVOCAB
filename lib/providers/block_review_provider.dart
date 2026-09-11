@@ -54,6 +54,11 @@ class BlockReviewNotifier extends StateNotifier<BlockReviewState> {
       if (ids.length != _knownIds.length || !ids.containsAll(_knownIds)) {
         _knownIds = ids;
         _rebuildDeck(next);
+      } else {
+        // Same blocks, new contents — an edit. Swap in the fresh objects
+        // without reshuffling, or the card you are looking at would keep
+        // showing what it said before you changed it.
+        _refreshReferences(next);
       }
     });
   }
@@ -63,6 +68,12 @@ class BlockReviewNotifier extends StateNotifier<BlockReviewState> {
   Set<String> _knownIds = const {};
 
   Set<String> _idsOf(List<BlockEntry> blocks) => {for (final b in blocks) b.id};
+
+  void _refreshReferences(List<BlockEntry> latest) {
+    if (state.deck.isEmpty) return;
+    final byId = {for (final b in latest) b.id: b};
+    state = state.copyWith(deck: [for (final b in state.deck) byId[b.id] ?? b]);
+  }
 
   void _rebuildDeck(List<BlockEntry> source) {
     if (source.isEmpty) {

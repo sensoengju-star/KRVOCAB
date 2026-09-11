@@ -8,6 +8,7 @@ class BlockEntry extends HiveObject {
     required this.block,
     required this.roman,
     required this.dateAdded,
+    this.definition = '',
   });
 
   String id;
@@ -15,11 +16,26 @@ class BlockEntry extends HiveObject {
   String roman;
   DateTime dateAdded;
 
+  /// What the block means, in the learner's own words — typically its
+  /// Sino-Korean sense (학 → study, learning) or the family of words it
+  /// anchors. Empty for a block that is only being learned for its sound.
+  String definition;
+
+  BlockEntry copyWith({String? block, String? roman, String? definition}) =>
+      BlockEntry(
+        id: id,
+        block: block ?? this.block,
+        roman: roman ?? this.roman,
+        dateAdded: dateAdded,
+        definition: definition ?? this.definition,
+      );
+
   Map<String, dynamic> toJson() => {
         'id': id,
         'block': block,
         'roman': roman,
         'dateAdded': dateAdded.toIso8601String(),
+        'definition': definition,
       };
 }
 
@@ -38,13 +54,17 @@ class BlockEntryAdapter extends TypeAdapter<BlockEntry> {
       block: fields[1] as String,
       roman: fields[2] as String,
       dateAdded: fields[3] as DateTime,
+      // Index 4 arrived after blocks already existed on disk. Records written
+      // before it simply lack the key, and read back as having no definition —
+      // which is exactly what they had. No migration step, nothing to break.
+      definition: (fields[4] as String?) ?? '',
     );
   }
 
   @override
   void write(BinaryWriter writer, BlockEntry obj) {
     writer
-      ..writeByte(4)
+      ..writeByte(5)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -52,6 +72,8 @@ class BlockEntryAdapter extends TypeAdapter<BlockEntry> {
       ..writeByte(2)
       ..write(obj.roman)
       ..writeByte(3)
-      ..write(obj.dateAdded);
+      ..write(obj.dateAdded)
+      ..writeByte(4)
+      ..write(obj.definition);
   }
 }
