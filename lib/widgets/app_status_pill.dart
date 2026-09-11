@@ -27,10 +27,11 @@ class AppStatusPill extends ConsumerWidget {
         ? (s.note.isEmpty ? 'Under construction' : 'Under construction · ${s.note}')
         : 'Ready';
 
+    final when = s.since == null ? '' : ' since ${describeSince(s.since!)}';
     return Tooltip(
       message: building
-          ? 'Something is being worked on — tap for details'
-          : 'Ready for use — tap to change',
+          ? 'Under construction$when — tap for details'
+          : 'Ready$when — tap to change',
       child: Material(
         color: building
             ? amber.withValues(alpha: 0.16)
@@ -127,6 +128,8 @@ class _StatusDialogState extends State<_StatusDialog> {
                 height: 1.5,
               ),
             ),
+            const SizedBox(height: 12),
+            _CurrentLine(current: widget.current),
             const SizedBox(height: 16),
             SegmentedButton<AppStatus>(
               segments: [
@@ -178,6 +181,50 @@ class _StatusDialogState extends State<_StatusDialog> {
           child: const Text('Save'),
         ),
       ],
+    );
+  }
+}
+
+/// What the status is right now, and since when — the answer to "I don't
+/// remember changing this".
+class _CurrentLine extends StatelessWidget {
+  const _CurrentLine({required this.current});
+  final AppStatusState current;
+
+  @override
+  Widget build(BuildContext context) {
+    final label = current.isConstruction ? 'Under construction' : 'Ready';
+    final when = current.since == null
+        ? 'since an unrecorded time — changes are timed from now on'
+        : 'since ${describeSince(current.since!)}';
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 9, 12, 9),
+      decoration: BoxDecoration(
+        color: AppColors.inset(context),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppColors.hairline(context)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.schedule, size: 15, color: AppColors.mutedInk(context)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text.rich(
+              TextSpan(children: [
+                TextSpan(
+                  text: '$label ',
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+                TextSpan(text: when),
+              ]),
+              style: GoogleFonts.inter(
+                color: AppColors.ink(context),
+                fontSize: 12.5,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
